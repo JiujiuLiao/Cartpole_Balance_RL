@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Time-stamped run logs (regenerable from a fresh run, too noisy to track)
+balance_log_*.csv
+swingup_*.csv
+accel_*.csv
+pwm_range_*.csv
+pwm_range_*_raw.csv
+angle_*.csv
+pendulum_*.csv
+*.png
+
+# Arduino build artifacts
+*.elf
+*.hex
+build/
