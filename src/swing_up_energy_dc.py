@@ -64,10 +64,10 @@ def compute_pwm(theta, omega, cart_pos):
         # Push toward center when nearly stopped
         return SWING_PWM if cart_pos <= 0 else -SWING_PWM
 
-    # Energy control: u = (E - E_ref) * omega * cos(theta)
+    # Energy control: u = -(E - E_ref) * omega * cos(theta)
     # (E - E_ref) > 0 always during swing-up (pendulum below top)
-    # sign(u) = sign(omega * cos(theta)) → push in direction that adds energy
-    u = (E - E_ref) * omega * math.cos(theta)
+    # sign(u) = -sign(omega * cos(theta)) → push in direction that adds energy
+    u = -(E - E_ref) * omega * math.cos(theta)
 
     if abs(u) < 0.5:       # near inflection point — skip push
         return 0
