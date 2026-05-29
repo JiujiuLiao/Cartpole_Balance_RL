@@ -27,7 +27,9 @@ from camera_comm import CameraSubscriber
 from config import (
     DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
     GRAVITY, PENDULUM_L_M, M_PER_PULSE, MAX_PULSES,
-    PWM_DEADBAND,
+    PWM_DEADBAND, PWM_LIMIT, GIVEUP_ANGLE_DEG,
+    # Balance PD gains (shared with balance_pid.py via config)
+    Kp, Kd, Kx, ANGLE_SIGN, OMEGA_SIGN, CART_SIGN,
 )
 
 # ── Connections ───────────────────────────────────────────────────────
@@ -37,8 +39,11 @@ ZMQ_ADDR  = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
 # ── Algorithm tuning (swing-up specific) ──────────────────────────────
 SWING_PWM = 255           # PWM applied when pushing (0-255)
 
-CATCH_ANGLE_DEG = 25.0    # |θ| < this → caught upright, hand off to balance.
-                          # Lenient for self-test. Tighten to 15° for handoff.
+CATCH_ANGLE_DEG = 15.0    # |θ| < this → caught upright, hand off to balance.
+                          # Tightened from 25→15 on 2026-05-29 to avoid catching
+                          # high-ω overshoots that the balance PD can't recover.
+CATCH_OMEGA_MAX = 2.0     # rad/s — also require |ω| below this for a clean catch.
+                          # Pendulum slamming through upright at ω=10 isn't "caught".
 
 CTRL_HZ   = 50            # control loop frequency (Hz)
 POS_EVERY = 10            # check cart position every N cycles (saves time)
@@ -55,8 +60,15 @@ def compute_pwm(theta, omega, cart_pos):
 
     Startup kick when omega ≈ 0 (motor would otherwise do nothing).
     """
-    E     = omega**2 - (2 * GRAVITY / PENDULUM_L_M) * math.cos(theta)
-    E_ref = -2 * GRAVITY / PENDULUM_L_M   # upright with zero velocity (most negative)
+    # Mechanical energy excess relative to upright equilibrium (θ=0, ω=0).
+    # Below ref (swing-up regime): E_diff < 0  → controller PUMPS energy
+    # At ref (upright, ω=0):       E_diff = 0  → no action
+    # Above ref (overshoot):       E_diff > 0  → controller DRAINS energy
+    # Because u = E_diff·ω·cos(θ) carries E_diff's sign, the controller
+    # auto-switches between pumping and draining without a special case.
+    # This fixes the old (E - E_ref) formula which was ALWAYS ≥ 0 and so
+    # kept pumping even after the pendulum had passed upright with excess ω.
+    E_diff = 0.5 * omega**2 + (GRAVITY / PENDULUM_L_M) * (math.cos(theta) - 1)
 
     # Startup kick: pendulum is nearly stationary at the bottom
     # Give a fixed push to initiate oscillation
@@ -64,10 +76,7 @@ def compute_pwm(theta, omega, cart_pos):
         # Push toward center when nearly stopped
         return SWING_PWM if cart_pos <= 0 else -SWING_PWM
 
-    # Energy control: u = -(E - E_ref) * omega * cos(theta)
-    # (E - E_ref) > 0 always during swing-up (pendulum below top)
-    # sign(u) = -sign(omega * cos(theta)) → push in direction that adds energy
-    u = -(E - E_ref) * omega * math.cos(theta)
+    u = E_diff * omega * math.cos(theta)
 
     if abs(u) < 0.5:       # near inflection point — skip push
         return 0
@@ -80,6 +89,90 @@ def compute_pwm(theta, omega, cart_pos):
     return total_pwm
 
 
+# ── Inline balance PD (runs after catch, in the same process) ────────
+BALANCE_HZ      = 100
+BALANCE_DT      = 1.0 / BALANCE_HZ
+BAL_POS_EVERY_N = 5     # 20 Hz cart polling at 100 Hz loop (less serial load)
+
+
+def balance_loop(comm, cam, t0, log_writer):
+    """
+    PD + cart-pos balance, inline. Runs until pendulum falls past
+    ±GIVEUP_ANGLE_DEG or cart hits ±MAX_PULSES.
+
+    Returns:
+      'fall'      — pendulum tilted past giveup; caller should re-attempt swing-up
+      'boundary'  — cart hit a hard limit; caller should stop
+      'interrupt' — KeyboardInterrupt
+    """
+    GIVEUP_RAD = math.radians(GIVEUP_ANGLE_DEG)
+
+    pos       = comm.get_position()
+    pos_count = 0
+    t_next    = time.time() + BALANCE_DT
+
+    print(f"\n  --- BALANCE MODE (Kp={Kp} Kd={Kd} Kx={Kx}) ---")
+    print(f"  Will give up if |θ|>{GIVEUP_ANGLE_DEG}° or |cart|>{MAX_PULSES} pulses.")
+
+    last_print = 0.0
+    try:
+        while True:
+            now = time.time()
+            sleep_t = t_next - now
+            if sleep_t > 0:
+                time.sleep(sleep_t)
+            t_next += BALANCE_DT
+
+            result = cam.latest_angle()
+            if result is None:
+                continue
+            theta_rad, omega, _pole_up = result
+            theta_deg = math.degrees(theta_rad)
+
+            # ---- Safety: pendulum fell ----
+            if abs(theta_deg) > GIVEUP_ANGLE_DEG:
+                comm.send_velocity(0)
+                print(f"\n  [BAL] FELL  θ={theta_deg:+.1f}°  ω={omega:+.2f} rad/s")
+                return 'fall'
+
+            # ---- Cart position (subsampled) ----
+            pos_count += 1
+            if pos_count >= BAL_POS_EVERY_N:
+                pos = comm.get_position()
+                pos_count = 0
+                if abs(pos) > MAX_PULSES:
+                    comm.send_velocity(0)
+                    print(f"\n  [BAL] CART BOUNDARY pos={pos}")
+                    return 'boundary'
+
+            # ---- PD + cart-pos drift correction ----
+            err = theta_deg     # camera convention: upright = 0°
+            pwm = (ANGLE_SIGN * (-Kp * err)
+                 + OMEGA_SIGN * ( Kd * omega)
+                 -  CART_SIGN * ( Kx * pos))
+
+            # Deadband compensation
+            if pwm != 0 and abs(pwm) < PWM_DEADBAND:
+                pwm = PWM_DEADBAND if pwm > 0 else -PWM_DEADBAND
+            pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, pwm)))
+
+            comm.send_velocity(pwm)
+
+            # ---- Log every loop, print every ~200ms ----
+            t = time.time() - t0
+            log_writer.writerow([f"{t:.4f}", f"{theta_deg:.2f}", f"{omega:.4f}",
+                                  "0.0000", pwm, pos])
+            if t - last_print > 0.2:
+                print(f"  {t:5.2f}  [BAL] θ={theta_deg:+6.1f}  ω={omega:+6.2f}  "
+                      f"pwm={pwm:+5}  pos={pos:+5}")
+                last_print = t
+
+    except KeyboardInterrupt:
+        comm.send_velocity(0)
+        print("\n  [BAL] interrupted")
+        return 'interrupt'
+
+
 # ── Main ──────────────────────────────────────────────────────────────
 def main():
     CATCH_RAD = math.radians(CATCH_ANGLE_DEG)
@@ -90,8 +183,10 @@ def main():
     print("=" * 62)
     print(f"  Port:    {PORT}")
     print(f"  ZMQ:     {ZMQ_ADDR}")
-    print(f"  L={PENDULUM_L_M} m   g={GRAVITY}   E_ref={-2*GRAVITY/PENDULUM_L_M:.2f}")
-    print(f"  PWM={SWING_PWM}   deadband={PWM_DEADBAND}   catch={CATCH_ANGLE_DEG}°")
+    print(f"  L={PENDULUM_L_M} m   g={GRAVITY}   "
+          f"E_diff target=0 (mechanical energy excess vs upright)")
+    print(f"  PWM={SWING_PWM}   deadband={PWM_DEADBAND}   "
+          f"catch: |θ|<{CATCH_ANGLE_DEG}° AND |ω|<{CATCH_OMEGA_MAX} rad/s")
     print(f"  Boundary: ±{MAX_PULSES} pulses (~{MAX_PULSES*M_PER_PULSE*100:.1f} cm)")
     print()
 
@@ -168,12 +263,26 @@ def main():
             if abs(omega) > OMEGA_MAX * 1.2:
                 continue
 
-            # Check upright catch condition
-            if abs(theta) < CATCH_RAD or pole_up:
-                comm.send_velocity(0)
-                print(f"\n  *** UPRIGHT! θ={math.degrees(theta):.1f}°  ω={omega:.2f} rad/s ***")
-                print("  Switch to balance controller now.")
-                break
+            # Check upright catch condition — BOTH small angle AND small ω.
+            # The old "or pole_up" branch fired even when pendulum was slamming
+            # through upright at high speed, then PWM=0 let it spin past, energy
+            # piled up cycle after cycle. Require slow ω so the catch is real.
+            if abs(theta) < CATCH_RAD and abs(omega) < CATCH_OMEGA_MAX:
+                print(f"\n  *** CAUGHT! θ={math.degrees(theta):.1f}°  ω={omega:.2f} rad/s ***")
+                print("  Handing off to inline balance (no process switch).")
+                # Run balance in this same process so we don't lose control
+                # during a process-start gap (pendulum falls in <100ms).
+                bal_result = balance_loop(comm, cam, t0, log_writer)
+                if bal_result == 'fall':
+                    # Pendulum fell — let outer loop resume swing-up from current state.
+                    cam.drain()                # discard stale frames
+                    t_next = time.time() + DT  # reset pacing
+                    pos_count = POS_EVERY      # force a fresh pos read next cycle
+                    print("  Resuming swing-up...\n")
+                    continue
+                else:
+                    # 'boundary' or 'interrupt' — give up entirely
+                    break
 
             # Check cart boundary (every POS_EVERY cycles)
             pos_count += 1
@@ -189,10 +298,11 @@ def main():
             pwm = compute_pwm(theta, omega, pos)
             comm.send_velocity(pwm)
 
-            # Log to screen and file
-            E_err = (omega**2
-                     - (2*GRAVITY/PENDULUM_L_M)*math.cos(theta)
-                     - (-2*GRAVITY/PENDULUM_L_M))
+            # Log E_diff: mechanical energy excess vs upright equilibrium.
+            # Negative during swing-up; crosses 0 at perfect catch; positive
+            # if pendulum has overshot with excess speed.
+            E_err = (0.5*omega**2
+                     + (GRAVITY/PENDULUM_L_M)*(math.cos(theta) - 1))
             t = time.time() - t0
             theta_deg = math.degrees(theta)
             print(f"  {t:5.2f}  {theta_deg:7.1f}  {omega:7.3f}  "

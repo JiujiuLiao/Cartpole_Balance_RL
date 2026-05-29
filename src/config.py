@@ -91,10 +91,15 @@ DEFAULT_ZMQ_ADDR    = "tcp://127.0.0.1:9999"   # V3 PUB runs on same Pi (2026-05
 # These exist here because pi_balance.py imports them. The newer balance_pid.py
 # and balance_lqr.py keep their own gains locally — different controllers
 # tune independently. New scripts: do NOT import these.
-Kp = 80.0                       # angle proportional gain (PWM per degree)
+Kp = 10.0                       # angle proportional gain (PWM per degree)
+                                # WAS 80 — saturated PWM at any |θ|>3°, making
+                                # balance slam the cart into max force as soon as
+                                # caught. 2026-05-29: dropped to 10 (so at |θ|=25°
+                                # giveup we hit ~250, just below saturation).
 Kd =  5.0                       # angle derivative   gain (PWM per rad/s)
 Kx =  0.0                       # cart-position pull  gain (PWM per pulse)
 
-ANGLE_SIGN = +1
-OMEGA_SIGN = +1
-CART_SIGN  = +1
+ANGLE_SIGN = -1   # verified 2026-05-29: +PWM=cart right, +θ=right tilt;
+                  # PD needs pwm>0 when θ>0, so the "-Kp·err" formula needs SIGN=-1.
+OMEGA_SIGN = +1   # not yet validated independently — flip if Kd makes oscillation worse
+CART_SIGN  = +1   # not yet validated — flip if cart drifts away from 0 instead of returning
