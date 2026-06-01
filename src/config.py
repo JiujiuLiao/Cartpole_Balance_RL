@@ -91,11 +91,14 @@ DEFAULT_ZMQ_ADDR    = "tcp://127.0.0.1:9999"   # V3 PUB runs on same Pi (2026-05
 # These exist here because pi_balance.py imports them. The newer balance_pid.py
 # and balance_lqr.py keep their own gains locally — different controllers
 # tune independently. New scripts: do NOT import these.
-Kp = 10.0                       # angle proportional gain (PWM per degree)
-                                # WAS 80 — saturated PWM at any |θ|>3°, making
-                                # balance slam the cart into max force as soon as
-                                # caught. 2026-05-29: dropped to 10 (so at |θ|=25°
-                                # giveup we hit ~250, just below saturation).
+Kp = 40.0                       # angle proportional gain (PWM per degree)
+                                # 80 (too aggressive, slammed at small θ)
+                                # → 10 (too gentle — at θ=8° pwm only +80, cart
+                                #   accel ~0.47 m/s², can't fight gravity 1.74 m/s²)
+                                # → 40 (2026-06-01): saturates pwm at θ≈6°,
+                                #   giving cart full force in the catch zone.
+                                #   Earlier "Kp=80 over-aggressive" diagnosis was
+                                #   wrong — real problem was sign + catch state.
 Kd =  5.0                       # angle derivative   gain (PWM per rad/s)
 Kx =  0.02                      # cart-position pull  gain (PWM per pulse)
                                 # 2026-05-29: bumped 0 → 0.02 because swing-up
