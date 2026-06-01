@@ -39,11 +39,18 @@ ZMQ_ADDR  = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
 # ── Algorithm tuning (swing-up specific) ──────────────────────────────
 SWING_PWM = 255           # PWM applied when pushing (0-255)
 
-CATCH_ANGLE_DEG = 15.0    # |θ| < this → caught upright, hand off to balance.
-                          # Tightened from 25→15 on 2026-05-29 to avoid catching
-                          # high-ω overshoots that the balance PD can't recover.
-CATCH_OMEGA_MAX = 2.0     # rad/s — also require |ω| below this for a clean catch.
-                          # Pendulum slamming through upright at ω=10 isn't "caught".
+CATCH_ANGLE_DEG = 10.0    # |θ| < this → caught upright, hand off to balance.
+                          # Was 8°; relaxed to 10° on 2026-05-29 (4th round)
+                          # because empirically the pendulum's natural energy
+                          # equilibrium has it peaking at ±9° with ω≈0
+                          # consistently — 8° was unreachable, 10° lets the
+                          # peaks trigger catch. Right at the cart's recovery
+                          # ceiling (arctan(1.5/9.81)≈8.7°) but with ω≈0
+                          # there's no fall acceleration to fight at t=0.
+CATCH_OMEGA_MAX = 0.5     # rad/s — also require |ω| below this for a clean catch.
+                          # Tightened 1.0 → 0.5: at ω=0.5 the pendulum travels
+                          # ~6° in 200ms, leaving balance ~2° of working room
+                          # before hitting the 8° recovery ceiling.
 
 CTRL_HZ   = 50            # control loop frequency (Hz)
 POS_EVERY = 10            # check cart position every N cycles (saves time)
@@ -76,15 +83,23 @@ def compute_pwm(theta, omega, cart_pos):
         # Push toward center when nearly stopped
         return SWING_PWM if cart_pos <= 0 else -SWING_PWM
 
-    u = E_diff * omega * math.cos(theta)
+    # Negative sign because of this hardware's PWM/encoder direction convention
+    # (empirically verified 2026-05-29: with this sign the pendulum swings up
+    # and auto-drains at overshoot; the unsigned version drains during swing-up
+    # and never gets up).
+    u = -E_diff * omega * math.cos(theta)
 
     if abs(u) < 0.5:       # near inflection point — skip push
         return 0
 
     base_pwm = SWING_PWM if u > 0 else -SWING_PWM
 
-    # Soft centering: keep cart from drifting to boundary
-    center_correction = -0.12 * SWING_PWM * (cart_pos / MAX_PULSES)
+    # Centering: keep cart from drifting to boundary.
+    # 2026-05-29: coefficient bumped 0.12 → 0.40 because the previous run
+    # drifted cart from 0 to +3678 in 21s. With 0.40, cart at ±2000 gives
+    # ±63 PWM correction (significant), cart at ±500 gives only ±16 (gentle
+    # in the middle so it doesn't interfere with the energy pump).
+    center_correction = -0.40 * SWING_PWM * (cart_pos / MAX_PULSES)
     total_pwm = max(-255, min(255, int(base_pwm + center_correction)))
     return total_pwm
 
@@ -323,3 +338,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 

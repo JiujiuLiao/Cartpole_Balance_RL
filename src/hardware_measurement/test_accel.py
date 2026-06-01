@@ -36,11 +36,17 @@ from config import (DEFAULT_SERIAL_PORT, SERIAL_BAUD,
 # ── Parameters ────────────────────────────────────
 PORT          = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
 
-TEST_PWM      = [100, 150, 200, 255]  # set after running test_pwm_range.py
-                                       # all values must be above the measured deadband
+TEST_PWM      = [100, 150, 200, 255,
+                 -100, -150, -200, -255]  # bidirectional: forward then reverse
+                                          # set after running test_pwm_range.py
+                                          # all |values| must be above the measured deadband
 
 N_REPEAT      = 5        # trials per PWM — median taken across trials to reduce noise
-RUN_TIME_S    = 1.5      # s         — motor run duration per trial
+RUN_TIME_S    = 1.0      # s         — motor run duration per trial
+                         # Was 1.5; reduced 2026-06-01 because at PWM=255 with
+                         # steady speed ~0.23 m/s, 1.5s gave 0.32 m travel —
+                         # too close to the 0.343 m boundary. 1.0s gives ~0.20 m
+                         # which is safe. Linear fit uses only first 0.5s anyway.
 SAMPLE_INT_S  = 0.005    # s         — interval between encoder reads (5 ms → ~200 samples/s)
 FIT_WINDOW_S  = 0.5      # s         — only first this many seconds used for accel fit (before speed saturates)
 STANDSTILL_S  = 0.4      # s         — must stay below STANDSTILL_THR for this long before trial starts
