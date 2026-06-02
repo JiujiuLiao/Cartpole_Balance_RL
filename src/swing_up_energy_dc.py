@@ -37,7 +37,11 @@ PORT      = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
 ZMQ_ADDR  = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
 
 # ── Algorithm tuning (swing-up specific) ──────────────────────────────
-SWING_PWM = 255           # PWM applied when pushing (0-255)
+SWING_PWM = 200           # PWM applied when pushing (0-255)
+                          # 2026-06-02: 255 → 200, reduce per-cycle energy
+                          # injection. Goal: smaller ω at catch → balance
+                          # starts closer to stable manifold. Trade-off:
+                          # swing-up takes a couple more cycles to reach top.
 
 CATCH_ANGLE_DEG = 10.0    # |θ| < this → caught upright, hand off to balance.
                           # Was 8°; relaxed to 10° on 2026-05-29 (4th round)
@@ -256,6 +260,9 @@ def main():
     t_next     = t0
     pos        = 0
     pos_count  = 0
+    last_print = 0.0   # 2026-06-02: throttle screen print to ~200ms (same as
+                       # balance_loop) — printing every 20ms at 50Hz added
+                       # ~5-10ms jitter to the control cycle.
 
     OMEGA_MAX = math.sqrt(4 * GRAVITY / PENDULUM_L_M)  # physical max ω ≈ 10.7 rad/s
 
@@ -320,10 +327,13 @@ def main():
                      + (GRAVITY/PENDULUM_L_M)*(math.cos(theta) - 1))
             t = time.time() - t0
             theta_deg = math.degrees(theta)
-            print(f"  {t:5.2f}  {theta_deg:7.1f}  {omega:7.3f}  "
-                  f"{E_err:8.3f}  {pwm:5}  {pos}")
+            # CSV log every cycle (full data integrity), screen print throttled
             log_writer.writerow([f"{t:.4f}", f"{theta_deg:.2f}", f"{omega:.4f}",
                                   f"{E_err:.4f}", pwm, pos])
+            if t - last_print > 0.2:
+                print(f"  {t:5.2f}  {theta_deg:7.1f}  {omega:7.3f}  "
+                      f"{E_err:8.3f}  {pwm:5}  {pos}")
+                last_print = t
 
     except KeyboardInterrupt:
         print("\n  Stopped.")
