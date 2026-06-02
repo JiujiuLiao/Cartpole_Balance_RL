@@ -49,7 +49,12 @@ LENS_POSITION = 4.5              # tune to pendulum distance
 # Blue tightened (S>=150, V>=80) to reject low-saturation background blueish
 # objects (doorknobs, shadows). Loosen via HSV tuner ('h' key) if the real
 # blue rod is missed.
-HSV_YELLOW_LOW = np.array([18, 90, 90], dtype=np.uint8)
+# Yellow S_lo bumped 90 -> 130: the paddle is a SATURATED yellow, whereas
+# beige / light-brown background (cardboard, wood) shares the same hue but is
+# desaturated (S ~ 40-100). Raising S_lo rejects that background. If the real
+# paddle is missed under dim light, lower it via the HSV tuner; the spatial
+# gate below is the second line of defense.
+HSV_YELLOW_LOW = np.array([18, 130, 90], dtype=np.uint8)
 HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
 HSV_BLUE_LOW = np.array([100, 150, 80], dtype=np.uint8)
 HSV_BLUE_HIGH = np.array([130, 255, 255], dtype=np.uint8)
@@ -59,6 +64,16 @@ HSV_BLUE_HIGH = np.array([130, 255, 255], dtype=np.uint8)
 # in the camera frame; if not, lower this value.
 MIN_AREA_PX = 500
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+# Spatial gate for yellow (defense vs beige/cardboard background).
+# The yellow paddle is on the SHORT arm (~3 cm) and is therefore always close
+# to the pivot. Any "yellow" blob farther than this many pixels from the axis
+# cannot be the paddle -> it is background -> reject it (then the angle falls
+# back to the axis->blue formula instead of being hijacked by a fake yellow).
+# Tune from the GUI: watch the printed yellow-to-axis distance with the real
+# paddle visible, then set this ~1.5x of that. Default sized for the 768x432
+# frame (~12.7 px/cm) assuming the paddle centroid sits <~9 cm from the pivot.
+YELLOW_MAX_AXIS_DIST_PX = 120
 
 OMEGA_LPF_ALPHA = 0.35           # EMA: ~3-frame time constant @120fps (~25ms)
 
@@ -133,6 +148,24 @@ def detect_centroid(hsv, lo, hi):
     return (M["m10"] / M["m00"], M["m01"] / M["m00"])
 
 
+def gate_yellow(yc, axis):
+    """
+    Reject a yellow blob that is too far from the pivot to be the short paddle.
+    Background beige (cardboard, wood) can pass the HSV filter; this geometric
+    gate removes it because the real paddle is always near the axis.
+
+    Returns (yc_or_None, distance_px_or_None):
+      - yc unchanged + distance  if accepted (or yc is None)
+      - None + distance          if rejected (so caller can fall back / log it)
+    """
+    if yc is None:
+        return None, None
+    d = math.hypot(yc[0] - axis[0], yc[1] - axis[1])
+    if d > YELLOW_MAX_AXIS_DIST_PX:
+        return None, d
+    return yc, d
+
+
 def compute_angle(yellow, blue, axis):
     """
     Returns (angle_rad, mode).
@@ -204,7 +237,7 @@ def read_hsv_tuner(yl, yh, bl, bh):
 # -------------------- Main --------------------
 
 def main():
-    global MIN_AREA_PX
+    global MIN_AREA_PX, YELLOW_MAX_AXIS_DIST_PX
 
     parser = argparse.ArgumentParser(description="Cart-pole vision (v3)")
     parser.add_argument("--axis-x", type=int, default=None,
@@ -213,6 +246,10 @@ def main():
                         help="Override axis Y pixel (can be negative or > H)")
     parser.add_argument("--min-area", type=int, default=None,
                         help=f"Min contour area in px (default {MIN_AREA_PX})")
+    parser.add_argument("--yellow-gate", type=int, default=None,
+                        help="Max yellow-to-axis distance in px; farther blobs "
+                             f"are rejected as background (default "
+                             f"{YELLOW_MAX_AXIS_DIST_PX})")
     parser.add_argument("--no-gui", action="store_true",
                         help="Headless mode: no preview window, no key handler. "
                              "Cuts CPU significantly — use for swing-up/balance runs. "
@@ -222,6 +259,10 @@ def main():
     if cli.min_area is not None:
         MIN_AREA_PX = cli.min_area
         print(f"[cli]  MIN_AREA_PX overridden -> {MIN_AREA_PX}")
+
+    if cli.yellow_gate is not None:
+        YELLOW_MAX_AXIS_DIST_PX = cli.yellow_gate
+        print(f"[cli]  YELLOW_MAX_AXIS_DIST_PX overridden -> {YELLOW_MAX_AXIS_DIST_PX}")
 
     GUI = not cli.no_gui
     if not GUI:
@@ -297,8 +338,13 @@ def main():
                 read_hsv_tuner(yl, yh, bl, bh)
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            yc = detect_centroid(hsv, yl, yh)
+            yc_raw = detect_centroid(hsv, yl, yh)
             bc = detect_centroid(hsv, bl, bh)
+
+            # Spatial gate: drop a yellow blob too far from the axis (background
+            # beige). yc_raw is kept for display so a rejection is visible.
+            yc, y_dist = gate_yellow(yc_raw, (axis_x, axis_y))
+            yellow_rejected = (yc is None and yc_raw is not None)
 
             angle_raw, mode = compute_angle(yc, bc, (axis_x, axis_y))
             valid = angle_raw is not None
@@ -324,8 +370,10 @@ def main():
                     ang_deg = (math.degrees(math.atan2(math.sin(angle),
                                                        math.cos(angle)))
                                if angle_prev is not None else float('nan'))
+                    ydist_txt = f"{y_dist:.0f}" if y_dist is not None else "--"
                     print(f"[v3] fps={real_fps:5.1f}  ang={ang_deg:+7.1f}deg  "
-                          f"w={omega_filt:+6.2f}  mode={mode}  valid={int(valid)}")
+                          f"w={omega_filt:+6.2f}  mode={mode}  valid={int(valid)}  "
+                          f"ydist={ydist_txt}{' REJ' if yellow_rejected else ''}")
 
             # --- ZMQ publish (legacy CSV, ONLY on valid frames) ---
             # Format expected by camera_comm.py parse_angle():
@@ -349,8 +397,15 @@ def main():
                 disp = frame.copy()
                 cv2.drawMarker(disp, (axis_x, axis_y), (0, 255, 255),
                                cv2.MARKER_CROSS, 14, 2)
+                # Yellow spatial gate: blobs outside this circle are rejected.
+                cv2.circle(disp, (axis_x, axis_y), YELLOW_MAX_AXIS_DIST_PX,
+                           (0, 255, 255), 1)
                 if yc is not None:
                     cv2.circle(disp, (int(yc[0]), int(yc[1])), 6, (0, 255, 255), 2)
+                if yellow_rejected:
+                    # Red X on a rejected (background) yellow blob.
+                    cv2.drawMarker(disp, (int(yc_raw[0]), int(yc_raw[1])),
+                                   (0, 0, 255), cv2.MARKER_TILTED_CROSS, 14, 2)
                 if bc is not None:
                     cv2.circle(disp, (int(bc[0]), int(bc[1])), 6, (255, 60, 0), 2)
                 if yc is not None and bc is not None:
@@ -359,10 +414,12 @@ def main():
 
                 # Wrap unwrapped accumulator back to (-pi, pi] for display.
                 wrapped_rad = math.atan2(math.sin(angle), math.cos(angle))
+                ydist_txt = f"{y_dist:.0f}" if y_dist is not None else "--"
                 txt = (f"ang={math.degrees(wrapped_rad):+7.2f}deg  "
                        f"w={omega_filt:+7.2f}rad/s  "
                        f"mode={mode}  fps={real_fps:5.1f}  "
-                       f"valid={int(valid)}")
+                       f"valid={int(valid)}  ydist={ydist_txt}"
+                       f"{'(REJ)' if yellow_rejected else ''}")
                 cv2.putText(disp, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX,
                             0.5, (255, 255, 255), 1, cv2.LINE_AA)
                 if calib.active:
