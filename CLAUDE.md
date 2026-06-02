@@ -1,65 +1,39 @@
-# Inverted Pendulum (cartpole-pid) — AI Navigation
+# Inverted Pendulum (cartpole-pid) — Code-level Navigation
 
-> **Read this file FIRST** when working on this project. It tells you what
-> exists, what the current architecture is, and how to extend the code
-> without breaking conventions.
-
----
-
-## ⚠️ Hard Rules (must follow at all times)
-
-1. **English only — everywhere.** All code, comments, docstrings, log
-   messages, plot labels, file names, variable names, commit messages,
-   CSV column headers, and any new documentation must be in English.
-   No Chinese, no German. The user may speak Chinese in chat, but
-   **anything written into the repo is English only**.
-2. **Single source of truth for parameters: `src/config.py`.**
-   Never hardcode tuneable numbers (PID gains, safety limits, hardware
-   constants, PWM characteristics) inside a script. Import them from
-   `config`. When you add a new tuneable value, add it to `config.py`
-   first, then import it.
-3. **One `MotorComm`.** Use `from motor_comm import MotorComm`. Never
-   re-define it inline in another script. If the class is missing a
-   method you need, add it to `src/motor_comm.py` — do not copy-paste.
-4. **Discuss before writing code** for any non-trivial change.
-   The user prefers to review the approach first.
-5. **Do not assume unknown physical quantities.** If you need a length,
-   mass, angle, speed, deadband, etc. and it is not in `config.py`,
-   ask the user — do not guess.
-6. **Visualizations use English labels** — no non-ASCII characters in
-   matplotlib titles, axis labels, legends, or annotations.
+> **Project-wide rules, hardware specs, wiring, and calibration values live in [`../CLAUDE.md`](../CLAUDE.md).** Read that first.
+>
+> This file only documents code-level details specific to `cartpole-pid/`.
+> Never duplicate hardware numbers here — they go stale. Point readers to
+> `../CLAUDE.md` or to `src/config.py` instead.
 
 ---
 
-## Current Architecture (as of 2026-05)
+## Current Architecture (cartpole-pid only)
 
 ```
 Pi 4 (camera + PID) ──USB──▶ ESP32 (IBT-2 + DC motor + encoder)
 ```
 
-The PC is **no longer in the control loop**. The Pi runs the full
-pipeline in a single process:
+The PC is **no longer in the control loop**. The Pi runs the full pipeline
+in a single process:
 
 ```
 picamera2 frame  →  HSV mask  →  marker angle  →  PID  →  serial  →  ESP32
 ```
 
-The PC is used only for SSH-based editing, monitoring, and offline
-analysis. There is no ZMQ, no NTP, no socket between Pi and PC in the
-real-time path.
+The PC is used only for SSH-based editing, monitoring, and offline analysis.
 
 **Implication for AI:** scripts that depend on ZMQ between Pi and PC
 (`src/camerapreview_detect_color2.py`, `src/camera_comm.py`,
-`src/balance_pid.py`) are **legacy**. Do not assume ZMQ is part of the
-control loop. The new entrypoint is `pi/pi_balance.py`.
+`src/balance_pid.py`) are **legacy**. The new entrypoint is `pi/pi_balance.py`.
 
 ---
 
-## Directory Layout
+## Directory Layout (inside cartpole-pid/)
 
 ```
 cartpole-pid/
-├── CLAUDE.md                        ← this file (AI entrypoint)
+├── CLAUDE.md                        ← this file (code-level)
 ├── pi/                              ← runs ON the Raspberry Pi
 │   ├── pi_balance.py                ← MAIN: balance PID controller
 │   └── pi_latency.py                ← latency measurement
@@ -84,18 +58,14 @@ cartpole-pid/
 
 ## Where to Find / Change Things
 
-| What                              | Where                                  |
-|-----------------------------------|----------------------------------------|
-| Track length, wheel diameter      | `src/config.py`                        |
-| Encoder pulses per revolution     | `src/config.py`                        |
-| PID gains (Kp / Kd / Kx)          | `src/config.py`                        |
-| Sign correctors (ANGLE/OMEGA/...) | `src/config.py`                        |
-| PWM limit, PWM deadband           | `src/config.py`                        |
-| Balance safety thresholds         | `src/config.py`                        |
-| Serial protocol with ESP32        | `src/motor_comm.py` docstring          |
-| Camera setup (FPS, resolution)    | inside the script that owns the camera |
-| HSV color thresholds              | inside the script that uses them       |
-| ESP32 firmware                    | `dc_motor_controller/`                 |
+| What                                        | Where                                  |
+|---------------------------------------------|----------------------------------------|
+| Any tuneable parameter (PID, deadband, ...) | `src/config.py`                        |
+| Serial protocol with ESP32                  | `src/motor_comm.py` docstring          |
+| Camera setup (FPS, resolution)              | inside the script that owns the camera |
+| HSV color thresholds                        | inside the script that uses them       |
+| ESP32 firmware                              | `dc_motor_controller/`                 |
+| **Hardware specs / wiring / GPIO map**      | **[`../CLAUDE.md`](../CLAUDE.md)**     |
 
 ---
 
@@ -130,22 +100,6 @@ python  src/analyze_swingup.py        # offline analysis
 
 ---
 
-## Measured Hardware Constants (do not guess these)
-
-| Quantity                  | Value             | Source                       |
-|---------------------------|-------------------|------------------------------|
-| Track length              | 0.84 m            | measured                     |
-| Pulley / wheel diameter   | 0.016 m           | calipers                     |
-| Encoder pulses per rev    | 616               | measured 2026-04-14          |
-| Pendulum length           | 0.34 m            | measured                     |
-| Pendulum mass             | 0.128 kg          | scale                        |
-| Cart mass                 | 1.014 kg          | scale                        |
-| Catch angle (target)      | ±5°               | tuning target                |
-| Motor PWM deadband        | ~26 (estimated)   | from latency test; recalibrate |
-| Vision latency (120 fps)  | 8.32 ms avg       | measured 2026-05-04          |
-
----
-
 ## Conventions When Adding Code
 
 - **Top of every script**: docstring with `PURPOSE`, `RUNS ON` (Pi or PC),
@@ -168,12 +122,11 @@ python  src/analyze_swingup.py        # offline analysis
 
 ---
 
-## Currently Open Items (work in progress)
+## Currently Open Items (PID work in progress)
 
 - [ ] PWM deadband compensation in `pi/pi_balance.py`
 - [ ] `omega` units: convert to deg/s for consistency with `theta_deg`
 - [ ] CSV logging during balance runs
-- [ ] Calibrate exact deadband (sweep PWM from 0 upward, log first motion)
 - [ ] First on-track balance run to find a working (Kp, Kd) pair
 
 ---
@@ -193,12 +146,13 @@ Do not add features to them. New work goes in `pi/pi_balance.py`.
 
 ## When You Don't Know Something
 
-**Ask the user.** Especially when you would otherwise need to invent:
+The "ask, don't guess" rule from [`../CLAUDE.md`](../CLAUDE.md) applies.
+Particularly:
 
-- a physical specification (length, mass, angle, speed, deadband)
+- a physical spec not yet in `config.py`
 - which of two similar scripts is canonical
 - whether a parameter is hardware-fixed or task-tuneable
 - which direction is "positive" for the motor / encoder / angle
 
-Do not guess and proceed. A short clarifying question is always cheaper
-than a wrong assumption baked into committed code.
+A clarifying question is always cheaper than a wrong assumption baked into
+committed code.
