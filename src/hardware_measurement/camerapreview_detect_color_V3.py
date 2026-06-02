@@ -73,7 +73,7 @@ MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 # Tune from the GUI: watch the printed yellow-to-axis distance with the real
 # paddle visible, then set this ~1.5x of that. Default sized for the 768x432
 # frame (~12.7 px/cm) assuming the paddle centroid sits <~9 cm from the pivot.
-YELLOW_MAX_AXIS_DIST_PX = 120
+YELLOW_MAX_AXIS_DIST_PX = 320
 
 OMEGA_LPF_ALPHA = 0.35           # EMA: ~3-frame time constant @120fps (~25ms)
 

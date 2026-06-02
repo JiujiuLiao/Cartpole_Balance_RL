@@ -99,7 +99,11 @@ Kp = 40.0                       # angle proportional gain (PWM per degree)
                                 #   giving cart full force in the catch zone.
                                 #   Earlier "Kp=80 over-aggressive" diagnosis was
                                 #   wrong — real problem was sign + catch state.
-Kd =  5.0                       # angle derivative   gain (PWM per rad/s)
+Kd =  8.0                       # angle derivative   gain (PWM per rad/s)
+                                # 2026-06-02: 5 → 8 for stronger damping in
+                                # balance D term. Counters the angular velocity
+                                # buildup that causes 200-500ms balance fall.
+                                # If cart shows high-freq jitter, dial back to 6-7.
 Kx =  0.02                      # cart-position pull  gain (PWM per pulse)
                                 # 2026-05-29: bumped 0 → 0.02 because swing-up
                                 # leaves cart near boundary (~2900 pulses) and
