@@ -31,24 +31,46 @@ Usage:
 import time
 import serial
 
+try:
+    from config import (AUTO_RECENTER_ON_CLOSE,
+                        RECENTER_PWM_MAX, RECENTER_PWM_FLOOR,
+                        RECENTER_SLOW_ZONE, RECENTER_TOLERANCE,
+                        RECENTER_TIMEOUT_S)
+except ImportError:
+    # Fallback defaults if config is not on sys.path
+    AUTO_RECENTER_ON_CLOSE = False
+    RECENTER_PWM_MAX = 120
+    RECENTER_PWM_FLOOR = 80
+    RECENTER_SLOW_ZONE = 300
+    RECENTER_TOLERANCE = 10
+    RECENTER_TIMEOUT_S = 10.0
+
 
 class MotorComm:
     PWM_MIN = -255
     PWM_MAX = 255
 
     def __init__(self, port, baud=115200, timeout=1.0,
-                 echo_timeout=2.0, boot_wait=2.0, verbose=False):
+                 echo_timeout=2.0, boot_wait=2.0, verbose=False,
+                 auto_recenter_on_close=None):
         """
-        port          serial device, e.g. "/dev/ttyUSB0" or "COM5"
-        timeout       pyserial read timeout (small for control loops, large for commands)
-        echo_timeout  how long send()/get_position() will wait for the echo
-        boot_wait     seconds to sleep after open (ESP32 reboots on serial connect)
-        verbose       print a connection banner
+        port                    serial device, e.g. "/dev/ttyUSB0" or "COM5"
+        timeout                 pyserial read timeout (small for control loops)
+        echo_timeout            how long send()/get_position() waits for the echo
+        boot_wait               seconds to sleep after open (ESP32 reboots on serial connect)
+        verbose                 print a connection banner
+        auto_recenter_on_close  if True, close() drives cart back to encoder 0
+                                before disconnecting. None = read from
+                                config.AUTO_RECENTER_ON_CLOSE.
+                                Pass False explicitly from move_cart2_center.py
+                                or any other positioning script (avoids recursion).
         """
         self.ser = serial.Serial(port, baud, timeout=timeout)
         time.sleep(boot_wait)
         self.ser.reset_input_buffer()
         self.echo_timeout = echo_timeout
+        self._auto_recenter = (AUTO_RECENTER_ON_CLOSE if auto_recenter_on_close is None
+                               else auto_recenter_on_close)
         if verbose:
             print(f"  Connected: {port} @ {baud}")
 
@@ -113,7 +135,42 @@ class MotorComm:
         """Send PWM=0 without waiting for echo."""
         self.send_velocity(0)
 
+    def _recenter(self, timeout=None):
+        """
+        Drive cart toward encoder 0 with proportional PWM. Used by close()
+        when auto_recenter_on_close=True. Silently no-ops if encoder reads fail.
+        """
+        if timeout is None:
+            timeout = RECENTER_TIMEOUT_S
+        pos = self.get_position(default=None)
+        if pos is None or abs(pos) <= RECENTER_TOLERANCE:
+            return
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pos = self.get_position(default=None)
+            if pos is None:
+                time.sleep(0.05)
+                continue
+            if abs(pos) <= RECENTER_TOLERANCE:
+                break
+            dist = abs(pos)
+            if dist >= RECENTER_SLOW_ZONE:
+                pwm = RECENTER_PWM_MAX
+            else:
+                ratio = dist / RECENTER_SLOW_ZONE
+                pwm = int(RECENTER_PWM_FLOOR + ratio * (RECENTER_PWM_MAX - RECENTER_PWM_FLOOR))
+                pwm = max(RECENTER_PWM_FLOOR, pwm)
+            # pos > 0 → cart is right of center → drive left (negative PWM)
+            # pos < 0 → cart is left  of center → drive right (positive PWM)
+            self.send_velocity(-pwm if pos > 0 else pwm)
+            time.sleep(0.02)
+        self.stop()
+        time.sleep(0.3)
+
     def close(self):
+        if self._auto_recenter:
+            self._recenter()
         self.stop()
         time.sleep(0.1)
         self.ser.close()

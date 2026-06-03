@@ -77,6 +77,21 @@ GIVEUP_ANGLE_DEG = 25.0         # ANY controller must abort balance/swing if
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  Auto-recenter on MotorComm.close()  (2026-06-03)
+# ════════════════════════════════════════════════════════════════════════
+# When True, MotorComm.close() drives the cart back to encoder 0 before
+# disconnecting. Scripts that already do positioning (move_cart2_center.py)
+# should pass auto_recenter_on_close=False to opt out (avoid recursion).
+
+AUTO_RECENTER_ON_CLOSE = True
+RECENTER_PWM_MAX       = 120    # full-speed PWM when cart is far from center
+RECENTER_PWM_FLOOR     = 80     # min PWM near center; must exceed PWM_DEADBAND (22)
+RECENTER_SLOW_ZONE     = 300    # pulses — inside this, PWM scales proportionally
+RECENTER_TOLERANCE     = 10     # pulses — stop within this many of 0
+RECENTER_TIMEOUT_S     = 10.0   # give up after this many seconds
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  Communications
 # ════════════════════════════════════════════════════════════════════════
 
