@@ -24,6 +24,7 @@ import os
 
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber
+from balance_lqr import balance_lqr_loop
 from config import (
     DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
     GRAVITY, PENDULUM_L_M, M_PER_PULSE, MAX_PULSES,
@@ -58,6 +59,11 @@ CATCH_OMEGA_MAX = 0.5     # rad/s — also require |ω| below this for a clean c
 
 CTRL_HZ   = 50            # control loop frequency (Hz)
 POS_EVERY = 10            # check cart position every N cycles (saves time)
+
+# 2026-06-05: which balance controller to invoke after a clean catch.
+# True  → balance_lqr.balance_lqr_loop  (LQR full-state feedback, gains in balance_lqr.py)
+# False → balance_loop                  (PD + cart-pos, gains in config.py)
+USE_LQR_BALANCE = True
 
 
 # ── Energy control ────────────────────────────────────────────────────
@@ -294,7 +300,8 @@ def main():
                 print("  Handing off to inline balance (no process switch).")
                 # Run balance in this same process so we don't lose control
                 # during a process-start gap (pendulum falls in <100ms).
-                bal_result = balance_loop(comm, cam, t0, log_writer)
+                balance_fn = balance_lqr_loop if USE_LQR_BALANCE else balance_loop
+                bal_result = balance_fn(comm, cam, t0, log_writer)
                 if bal_result == 'fall':
                     # Pendulum fell — let outer loop resume swing-up from current state.
                     cam.drain()                # discard stale frames

@@ -28,12 +28,11 @@ from scipy.linalg import solve_continuous_are
 # ======================================================================
 # PHYSICAL PARAMETERS - !!! PLACEHOLDERS - REPLACE WITH LAB MEASUREMENTS !!!
 # ======================================================================
-M_c = 1.50         # cart mass (kg)        — weigh cart + Pi + camera + plate
-m_p = 0.050        # pendulum mass (kg)    — weigh whole rod assembly
-l_p = 0.20         # pivot-to-CoM distance (m)
-                   #   NOTE: NOT the same as the rod length 0.34 m.
-                   #   Find by balancing rod on a thin support; mark the
-                   #   balance point; measure from there to the pivot.
+M_c = 1.014        # cart mass (kg) — measured 2026-05-27
+m_p = 0.127        # pendulum mass (kg) — measured 2026-05-27
+l_p = 0.17         # pivot-to-CoM distance (m). Rod is 0.34 m total,
+                   # symmetric (heavy ends, light middle, balanced at
+                   # midpoint by Jiujiu on 2026-06-05), so CoM = L/2.
 g   = 9.81         # gravity (m/s^2)
 
 # ======================================================================
@@ -47,10 +46,12 @@ g   = 9.81         # gravity (m/s^2)
 # Varghese 2017 used diag(1, 1, 500, 250) and R=1 for a 2.4 kg cart.
 # For a lighter cart (your hardware), reduce x weights proportionally.
 Q = np.diag([
-    1.0,     # theta       (rad)
-    1.0,     # theta_dot   (rad/s)
-    50.0,    # x_cart      (m)         — Varghese 500 / lighter cart -> 50
-    25.0,    # x_cart_dot  (m/s)       — Varghese 250 / lighter cart -> 25
+    100.0,   # theta       (rad)     — MOST important, drive to upright
+    10.0,    # theta_dot   (rad/s)
+    10.0,    # x_cart      (m)       — small drift OK
+    50.0,    # x_cart_dot  (m/s)     — HEAVY penalty: at v=0.30 m/s the
+                                    #   motor has 0 N left, so LQR must
+                                    #   keep cart well below v_max
 ])
 R = np.array([[1.0]])    # scalar; bigger = gentler control
 
@@ -68,8 +69,11 @@ A = np.array([
 
 # B assumes u is in NEWTONS. If you want K directly in PWM units, scale
 # B by your measured FORCE_PER_PWM (Newton per PWM count, typically 0.01 - 0.1).
-FORCE_PER_PWM = 1.0    # set to 1.0 -> K is in N-units;
-                       # set to ~0.05 (if you measured it) -> K is in PWM units
+FORCE_PER_PWM = 0.01882    # N per PWM unit, calibrated 2026-06-05.
+                            # test_vmax curve fit gave F_eff(PWM=255) = 4.80 N
+                            # → 4.80 / 255 = 0.01882. With this scaling the
+                            # computed K is directly in PWM units (no further
+                            # multiplication needed in balance_lqr.py).
 B = np.array([
     [0.0],
     [-1.0 / (M_c * l_p)],
