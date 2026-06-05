@@ -40,7 +40,8 @@ def main():
     print(f"  Port   : {PORT}")
     print()
 
-    comm = MotorComm(PORT, SERIAL_BAUD, verbose=True)
+    comm = MotorComm(PORT, SERIAL_BAUD, verbose=True,
+                     auto_recenter_on_close=False)   # this script IS the recenter
 
     pos = comm.get_position(default=None)
     if pos is None:
