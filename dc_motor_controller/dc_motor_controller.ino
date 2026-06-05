@@ -124,6 +124,7 @@ void setup() {
   pinMode(ENCODER_B, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoderISR, RISING);
   Serial.println("DC Motor Controller Ready");
+  Serial.println("PWM frequency: 20000 Hz (firmware build 2026-06-05)");
 }
 
 void loop() {
