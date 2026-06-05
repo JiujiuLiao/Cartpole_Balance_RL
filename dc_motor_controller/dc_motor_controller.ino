@@ -111,6 +111,14 @@ void setup() {
   analogWrite(RPWM, 0);
   analogWrite(LPWM, 0);
 
+  // 2026-06-05: raise PWM from default (~1 kHz) to 20 kHz.
+  // Motor L/R ≈ 5 ms — at 1 kHz current never reaches DC equiv,
+  // giving only ~5 N effective force (1/26 of nameplate 139 N).
+  // 20 kHz is above the motor electrical bandwidth and well below
+  // the BTS7960 driver limit (~25 kHz).
+  analogWriteFrequency(RPWM, 20000);
+  analogWriteFrequency(LPWM, 20000);
+
   Serial.begin(115200);
   pinMode(ENCODER_A, INPUT_PULLUP);
   pinMode(ENCODER_B, INPUT_PULLUP);
