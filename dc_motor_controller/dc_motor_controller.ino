@@ -12,6 +12,16 @@ const int ENCODER_B = 19;
 
 volatile long encoderPos = 0;
 
+// ── Acceleration burst test (command <a,PWM>) ─────
+// ESP32-side self-timed sampling: micros() + own encoder into RAM, no serial
+// in the timing loop, so Pi<->ESP32 latency does NOT affect the measurement.
+const unsigned int  ACCEL_SAMPLE_US  = 1000;   // 1 ms sampling grid
+const long          ACCEL_MAX_PULSES = 3000;   // auto-brake distance (~24.5 cm, = BOUNDARY)
+const unsigned long ACCEL_MAX_MS     = 700;    // time backstop
+const int           ACCEL_MAX_SAMPLES = 800;   // 800*(4+4) = 6.4 KB
+unsigned long accel_t[ACCEL_MAX_SAMPLES];      // microseconds since step
+long          accel_pos[ACCEL_MAX_SAMPLES];    // encoder pulses
+
 void IRAM_ATTR encoderISR() {
   if (digitalRead(ENCODER_B) == HIGH) {
     encoderPos++;
@@ -92,6 +102,41 @@ void cmd_position() {
   Serial.print('\n');
 }
 
+// Acceleration burst: apply <a,PWM> step from rest, sample (micros, encoderPos)
+// at a true 1 ms grid into RAM, auto-brake at distance/time limit, dump CSV.
+void cmd_accel() {
+  int pwm = constrain((int)messageValue, -255, 255);
+  encoderPos = 0;
+  int n = 0;
+  unsigned long t0 = micros();
+  unsigned long next = 0;
+  setMotor(pwm);                                  // t=0 is stamped here, locally
+  while (n < ACCEL_MAX_SAMPLES) {
+    while ((micros() - t0) < next) { /* busy-wait to the 1 ms grid */ }
+    unsigned long t = micros() - t0;
+    long p = encoderPos;                          // volatile read
+    accel_t[n]   = t;
+    accel_pos[n] = p;
+    n++;
+    next += ACCEL_SAMPLE_US;
+    if (labs(p) >= ACCEL_MAX_PULSES) break;        // distance auto-brake
+    if (t >= ACCEL_MAX_MS * 1000UL) break;         // time backstop
+  }
+  setMotor(0);                                     // brake (both PWM low)
+
+  Serial.print("ACCEL_BEGIN,pwm=");
+  Serial.print(pwm);
+  Serial.print(",n=");
+  Serial.println(n);
+  Serial.println("t_us,pos_pulses");
+  for (int i = 0; i < n; i++) {
+    Serial.print(accel_t[i]);
+    Serial.print(',');
+    Serial.println(accel_pos[i]);
+  }
+  Serial.println("ACCEL_END");
+}
+
 void returnParsedData() {
   // Echo back the command so Python can confirm receipt
   Serial.print('<');
@@ -139,6 +184,8 @@ void loop() {
       cmd_home();
     } else if (strcmp(messageType, "p") == 0) {
       cmd_position();
+    } else if (strcmp(messageType, "a") == 0) {
+      cmd_accel();
     }
 
     returnParsedData();
