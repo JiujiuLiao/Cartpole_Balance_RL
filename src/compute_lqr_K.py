@@ -47,7 +47,7 @@ g   = 9.81         # gravity (m/s^2)
 # For a lighter cart (your hardware), reduce x weights proportionally.
 Q = np.diag([
     100.0,   # theta       (rad)     — MOST important, drive to upright
-    10.0,    # theta_dot   (rad/s)
+    10.0,    # theta_dot   (rad/s) 
     10.0,    # x_cart      (m)       — small drift OK
     50.0,    # x_cart_dot  (m/s)     — HEAVY penalty: at v=0.30 m/s the
                                     #   motor has 0 N left, so LQR must
