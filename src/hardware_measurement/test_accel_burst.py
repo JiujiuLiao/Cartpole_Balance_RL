@@ -128,10 +128,16 @@ def analyze(t, x):
         v = np.convolve(v, np.ones(5) / 5.0, mode="same")
     v_term = float(np.median(v[int(0.7 * len(v)):])) if len(v) > 5 else float(v[-1])
 
-    # early region: still clearly accelerating (below 60% of terminal speed)
+    # early region = the contiguous initial accelerating part, ending at the
+    # FIRST time velocity reaches 60% of terminal. Using the first crossing
+    # (not the last index below threshold) makes this robust to the smoothing
+    # edge-artifact at the END of the trace: np.convolve(mode="same") zero-pads
+    # the final samples and drags their velocity down, which previously could
+    # land below the threshold, push `cut` to the full length, and collapse the
+    # fitted acceleration to ~0 (the spurious 0.13 m/s^2 "weak" runs).
     if v_term > 1e-6:
-        idx = np.where(v < 0.6 * v_term)[0]
-        cut = idx[-1] + 1 if len(idx) else len(t)
+        above = np.where(v >= 0.6 * v_term)[0]
+        cut = int(above[0]) if len(above) else len(t)
     else:
         cut = len(t)
     cut = int(np.clip(cut, 5, len(t)))
@@ -158,7 +164,12 @@ def feasibility(a_max):
 
 
 def plot(res, title, png, show):
-    import matplotlib
+    try:
+        import matplotlib
+    except ModuleNotFoundError:
+        print("  [plot skipped] matplotlib not installed "
+              "(pip install matplotlib, or re-analyze the saved CSV offline)")
+        return
     if not show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -185,7 +196,7 @@ def plot(res, title, png, show):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("port", nargs="?", default=DEFAULT_SERIAL_PORT)
-    ap.add_argument("--pwm", type=int, nargs="+", default=[200])
+    ap.add_argument("--pwm", type=int, nargs="+", default=[255])
     ap.add_argument("--dir", choices=["a", "b", "both"], default="both",
                     help="a=forward, b=reverse, both=measure each and take min")
     ap.add_argument("--runs", type=int, default=5)
@@ -194,9 +205,18 @@ def main():
     args = ap.parse_args()
 
     if args.csv:
-        rows = [l for l in Path(args.csv).read_text().splitlines()
-                if l and not l[0].isalpha()]
-        arr = np.array([[float(x) for x in r.split(",")] for r in rows])
+        arr = []
+        for ln in Path(args.csv).read_text().splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#") or ln[0].isalpha():
+                continue                         # skip blanks / "# t_us,pos" header
+            parts = ln.split(",")
+            if len(parts) >= 2:
+                try:
+                    arr.append([float(parts[0]), float(parts[1])])
+                except ValueError:
+                    continue
+        arr = np.array(arr)
         res = analyze(arr[:, 0] / 1e6, arr[:, 1] * M_PER_PULSE)
         print("  a_max=%.3f  v_term=%.3f" % (res["a_max"], res["v_term"]))
         plot(res, "Cart accel (%s)" % args.csv, "burst_result.png", args.plot)
