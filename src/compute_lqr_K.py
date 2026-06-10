@@ -26,14 +26,40 @@ from scipy.linalg import solve_continuous_are
 
 
 # ======================================================================
-# PHYSICAL PARAMETERS - !!! PLACEHOLDERS - REPLACE WITH LAB MEASUREMENTS !!!
+# PHYSICAL PARAMETERS  (raw measured values)
 # ======================================================================
 M_c = 1.014        # cart mass (kg) — measured 2026-05-27
-m_p = 0.127        # pendulum mass (kg) — measured 2026-05-27
-l_p = 0.17         # pivot-to-CoM distance (m). Rod is 0.34 m total,
-                   # symmetric (heavy ends, light middle, balanced at
-                   # midpoint by Jiujiu on 2026-06-05), so CoM = L/2.
 g   = 9.81         # gravity (m/s^2)
+
+# --- Pendulum mass distribution (measured 2026-06-10) ---
+# The pendulum is NOT a uniform rod: the mass sits mostly at the two ends, so
+# we build the FULL physical model with rotational inertia I (same derivation
+# as the reference project tarunkumarnyu/main.cpp), NOT the point-mass
+# approximation. All distances are measured FROM THE PIVOT (rotation axis).
+# ⚠️ CONFIRM these distances against the real hardware.
+L_rod   = 0.34     # rod length (m): pivot -> far end
+m_rod   = 0.024    # uniform rod (kg)
+m_pivot = 0.053    # connector lump AT the pivot        (r = 0)
+m_tip   = 0.052    # weight at the far end              (r = L_rod)
+r_pivot = 0.0      # connector distance from pivot (m)
+r_tip   = L_rod    # tip-weight distance from pivot (m)
+
+m_p = m_rod + m_pivot + m_tip          # total pendulum mass (kg)
+
+# Center of mass distance from pivot:  l = Σ(m_i·r_i) / Σ m_i
+l_p = (m_pivot * r_pivot
+       + m_rod  * (L_rod / 2.0)        # uniform rod's CoM is at its middle
+       + m_tip  * r_tip) / m_p
+
+# Inertia about the PIVOT
+#   point mass:                 I = m·r²
+#   uniform rod about its END:  I = (1/3)·m·L²
+I_pivot = (m_pivot * r_pivot**2
+           + (1.0 / 3.0) * m_rod * L_rod**2
+           + m_tip * r_tip**2)
+
+# Inertia about the CoM (parallel-axis theorem):  I_cm = I_pivot − m·l²
+I_cm = I_pivot - m_p * l_p**2
 
 # ======================================================================
 # LQR WEIGHTS - tune these to shape behaviour
@@ -58,27 +84,37 @@ R = np.array([[1.0]])    # scalar; bigger = gentler control
 
 # ======================================================================
 # State-space matrices (linearized about upright equilibrium)
-# Derivation: Varghese 2017 eqs 17-19; sign-corrected.
+# FULL physical model WITH pendulum inertia I_cm — same derivation as the
+# reference project tarunkumarnyu/main.cpp (his build_model_and_weights()).
+# State order: x = [theta, theta_dot, x_cart, x_cart_dot]
+#
+#   p = I_cm·(M+m) + M·m·l²              (coupling determinant; his "p")
+#   theta_ddot / theta =  m·g·l·(M+m) / p
+#   x_ddot     / theta = -m²·g·l² / p
+#   theta_ddot / F     = -m·l / p
+#   x_ddot     / F     =  (I_cm + m·l²) / p
+#
+# Sanity check: set I_cm = 0 and every term collapses back to the old
+# point-mass model  [ (M+m)g/(M·l), -m·g/M, -1/(M·l), 1/M ]  — same family.
 # ======================================================================
+M, m, l, I = M_c, m_p, l_p, I_cm
+p = I * (M + m) + M * m * l * l
+
 A = np.array([
-    [0.0,                                1.0, 0.0, 0.0],
-    [(M_c + m_p) * g / (M_c * l_p),      0.0, 0.0, 0.0],
-    [0.0,                                0.0, 0.0, 1.0],
-    [-m_p * g / M_c,                     0.0, 0.0, 0.0],
+    [0.0,                       1.0, 0.0, 0.0],
+    [m * g * l * (M + m) / p,   0.0, 0.0, 0.0],   # theta_ddot from theta
+    [0.0,                       0.0, 0.0, 1.0],
+    [-m * m * g * l * l / p,    0.0, 0.0, 0.0],   # x_ddot from theta
 ])
 
-# B assumes u is in NEWTONS. If you want K directly in PWM units, scale
-# B by your measured FORCE_PER_PWM (Newton per PWM count, typically 0.01 - 0.1).
-FORCE_PER_PWM = 0.01882    # N per PWM unit, calibrated 2026-06-05.
-                            # test_vmax curve fit gave F_eff(PWM=255) = 4.80 N
-                            # → 4.80 / 255 = 0.01882. With this scaling the
-                            # computed K is directly in PWM units (no further
-                            # multiplication needed in balance_lqr.py).
+# B in NEWTONS, then scaled by FORCE_PER_PWM so the resulting K comes out
+# directly in PWM units (no extra multiply needed in balance_lqr.py).
+FORCE_PER_PWM = 0.01345    # N per PWM. F_eff(PWM=255) ≈ 3.429 N → 3.429/255.
 B = np.array([
     [0.0],
-    [-1.0 / (M_c * l_p)],
+    [-m * l / p],            # theta_ddot from F
     [0.0],
-    [1.0 / M_c],
+    [(I + m * l * l) / p],   # x_ddot from F
 ]) * FORCE_PER_PWM
 
 
@@ -89,7 +125,8 @@ def main():
     print("=" * 64)
     print("  LQR gain computation for cart-pole")
     print("=" * 64)
-    print(f"  M_c = {M_c} kg   m_p = {m_p} kg   l_p = {l_p} m")
+    print(f"  M_c = {M_c} kg   m_p = {m_p:.3f} kg   l_p = {l_p:.4f} m (computed)")
+    print(f"  I_cm = {I_cm:.6f} kg·m²   I_pivot = {I_pivot:.6f} kg·m²")
     print(f"  FORCE_PER_PWM = {FORCE_PER_PWM}")
     print(f"  Q diag       = {np.diag(Q)}")
     print(f"  R            = {R[0,0]}")

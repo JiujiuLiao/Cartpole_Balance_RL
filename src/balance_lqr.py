@@ -29,10 +29,10 @@ from config import (
 # ----------------------------------------------------------------------
 # These are PLACEHOLDERS.  Run `python compute_lqr_K.py` on PC, then
 # copy the printed K values here.
-K_THETA      =  -800.0    # PLACEHOLDER
-K_THETA_DOT  =  -120.0    # PLACEHOLDER
-K_X          =    -5.0    # PLACEHOLDER
-K_X_DOT      =   -45.0    # PLACEHOLDER
+K_THETA      = -1752.4887    # theta gain
+K_THETA_DOT  = -306.8017    # theta_dot gain
+K_X          = -3.1623    # cart-position gain
+K_X_DOT      = -25.3450    # cart-velocity gain
 
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
