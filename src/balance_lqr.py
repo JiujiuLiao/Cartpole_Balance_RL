@@ -58,6 +58,25 @@ def _deadband(pwm):
     return pwm
 
 
+# [DIAG] temporary timing helpers — remove together with the diag instrumentation
+def _stats_ms(vals):
+    if not vals:
+        return (0, 0.0, 0.0, 0.0, 0)
+    s = sorted(v * 1000.0 for v in vals)
+    n = len(s)
+    return (n, s[n // 2], s[min(n - 1, int(0.95 * n))], s[-1],
+            sum(1 for v in s if v > 50.0))
+
+
+def _print_timing_diag(diag):
+    print("\n  ===== TIMING DIAGNOSTIC (per-call, ms) =====")
+    print(f"  {'step':<10}{'n':>6}{'median':>9}{'p95':>9}{'max':>9}{'>50ms':>8}")
+    for name in ("vision", "serial", "command", "cycle"):
+        n, med, p95, mx, over = _stats_ms(diag[name])
+        print(f"  {name:<10}{n:>6}{med:>9.1f}{p95:>9.1f}{mx:>9.1f}{over:>8}")
+    print("  => the step whose max matches the dt spike (~80-120ms) is the culprit.\n")
+
+
 def balance_lqr_loop(comm, cam, t0, log_writer):
     """
     Inline LQR balance. Drop-in replacement for swing_up_energy_dc.balance_loop.
@@ -87,8 +106,18 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     t_next     = time.time() + DT
     last_print = 0.0
 
+    # [DIAG] temporary timing instrumentation — remove after confirming stall source
+    diag = {"vision": [], "serial": [], "command": [], "cycle": []}
+    _loop_prev = None
+
     try:
         while True:
+            # [DIAG] full loop period (matches the CSV dt)
+            _cyc = time.perf_counter()
+            if _loop_prev is not None:
+                diag["cycle"].append(_cyc - _loop_prev)
+            _loop_prev = _cyc
+
             # ---- pace loop ------------------------------------------
             now      = time.time()
             sleep_t  = t_next - now
@@ -97,7 +126,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             t_next += DT
 
             # ---- pull latest vision --------------------------------
+            _t = time.perf_counter()                          # [DIAG]
             result = cam.latest_angle()
+            diag["vision"].append(time.perf_counter() - _t)   # [DIAG]
             if result is None:
                 continue
             theta_rad, omega, _pole_up = result
@@ -113,7 +144,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             cart_poll_count += 1
             if cart_poll_count >= CART_POLL_EVERY_N:
                 cart_poll_count = 0
+                _t = time.perf_counter()                          # [DIAG]
                 pos             = comm.get_position()
+                diag["serial"].append(time.perf_counter() - _t)   # [DIAG]
                 cart_pos_m      = pos * M_PER_PULSE
 
                 t_cart = time.time()
@@ -137,7 +170,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                     + K_X_DOT     * cart_vel_m_s)
             pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, _deadband(PWM_SIGN * u_pwm))))
 
+            _t = time.perf_counter()                          # [DIAG]
             comm.send_velocity(pwm)
+            diag["command"].append(time.perf_counter() - _t)  # [DIAG]
 
             # ---- log every cycle, print throttled -----------------
             t = time.time() - t0
@@ -154,3 +189,5 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
         comm.send_velocity(0)
         print("\n  [LQR] interrupted")
         return 'interrupt'
+    finally:
+        _print_timing_diag(diag)   # [DIAG]
