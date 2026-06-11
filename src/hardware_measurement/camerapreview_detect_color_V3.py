@@ -131,8 +131,10 @@ def save_hsv(yl, yh, bl, bh):
 
 # -------------------- Detection --------------------
 
-def detect_centroid(hsv, lo, hi):
+def detect_centroid(hsv, lo, hi, min_area=None):
     """Return (cx, cy) of the largest valid blob in HSV range, or None."""
+    if min_area is None:
+        min_area = MIN_AREA_PX
     mask = cv2.inRange(hsv, lo, hi)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL)
@@ -140,7 +142,7 @@ def detect_centroid(hsv, lo, hi):
     if not contours:
         return None
     c = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(c) < MIN_AREA_PX:
+    if cv2.contourArea(c) < min_area:
         return None
     M = cv2.moments(c)
     if M["m00"] == 0:
@@ -187,51 +189,32 @@ def compute_angle(yellow, blue, axis):
     return None, "none"
 
 
-# -------------------- ROI crop (speed-up; does NOT change the measurement) --------------------
-# Run cvtColor + detect_centroid on a small crop instead of the whole frame.
-# FIXED box: centred on the pivot (axis), half-size = blue-tip radius (rod length
-# in px) + margin, so it contains the whole swing circle. The box edges NEVER
-# move, so a marker that's visible is never clipped (a moving/tracking box was
-# clipping the fast-moving blue tip and causing angle jumps). The half-size
-# auto-grows from full-frame detections and never shrinks. If EITHER marker is
-# missing inside the crop, re-acquire on the full frame (so a clipped marker
-# never produces a wrong single-marker angle).
-ROI_MARGIN_PX = 60     # padding beyond the rod tip (px).
+# -------------------- Downscaled detection (speed-up; coarser but simple) --------------------
+# Run cvtColor + detect_centroid on a downscaled copy of the frame, then scale
+# the centroids back to full-frame coordinates. Fewer pixels -> faster; the
+# measurement (gate / compute_angle / axis) is UNCHANGED because the centroids
+# come back in full-frame coords. (Replaces the old ROI cropping.)
+DETECT_SCALE = 0.5     # 0.5 -> detect on 384x216. Lower = faster but coarser angle.
 
 
-def _fixed_box(axis, half, shape):
-    h, w = shape[:2]
-    x0 = int(max(0, axis[0] - half)); y0 = int(max(0, axis[1] - half))
-    x1 = int(min(w, axis[0] + half)); y1 = int(min(h, axis[1] + half))
-    if x1 - x0 < 4 or y1 - y0 < 4:
-        return None
-    return (x0, y0, x1, y1)
-
-
-def detect_markers(frame, yl, yh, bl, bh, axis, roi_half, margin):
-    """Detect yellow & blue centroids in FULL-FRAME coords using a fixed,
-    pivot-centred ROI crop. Requires BOTH markers inside the crop to trust it;
-    otherwise re-acquires on the full frame. roi_half auto-grows (never shrinks).
-    Returns (yc_raw, bc, roi_half)."""
-    if roi_half is not None:
-        box = _fixed_box(axis, roi_half, frame.shape)
-        if box is not None:
-            x0, y0, x1, y1 = box
-            hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            yc = detect_centroid(hsv, yl, yh)
-            bc = detect_centroid(hsv, bl, bh)
-            if yc is not None and bc is not None:       # both clean -> trust crop
-                return ((yc[0] + x0, yc[1] + y0),       # ★ local -> full coords
-                        (bc[0] + x0, bc[1] + y0), roi_half)
-            # a marker missing -> re-acquire full frame (avoid clipped single-marker)
-
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)         # full frame
-    yc = detect_centroid(hsv, yl, yh)
-    bc = detect_centroid(hsv, bl, bh)
-    if bc is not None:                                  # blue tip defines the radius
-        r = math.hypot(bc[0] - axis[0], bc[1] - axis[1]) + margin
-        roi_half = r if roi_half is None else max(roi_half, r)
-    return yc, bc, roi_half
+def detect_markers(frame, yl, yh, bl, bh):
+    """Detect yellow & blue centroids in FULL-FRAME coords by detecting on a
+    downscaled copy. Returns (yc_raw, bc)."""
+    if DETECT_SCALE != 1.0:
+        small = cv2.resize(frame, None, fx=DETECT_SCALE, fy=DETECT_SCALE,
+                           interpolation=cv2.INTER_AREA)
+        min_area = MIN_AREA_PX * DETECT_SCALE * DETECT_SCALE   # blob shrinks by scale^2
+        inv = 1.0 / DETECT_SCALE
+    else:
+        small, min_area, inv = frame, MIN_AREA_PX, 1.0
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    yc = detect_centroid(hsv, yl, yh, min_area)
+    bc = detect_centroid(hsv, bl, bh, min_area)
+    if yc is not None:
+        yc = (yc[0] * inv, yc[1] * inv)        # scaled -> full-frame coords
+    if bc is not None:
+        bc = (bc[0] * inv, bc[1] * inv)
+    return yc, bc
 
 
 def unwrap(prev, current):
@@ -359,7 +342,6 @@ def main():
 
     angle_prev = None
     omega_filt = 0.0
-    roi = None                      # ROI tracking state (None = full-frame search)
     t_prev = time.perf_counter()
     fps_t0 = t_prev
     fps_n = 0
@@ -385,10 +367,8 @@ def main():
             if tuner_open:
                 read_hsv_tuner(yl, yh, bl, bh)
 
-            # ROI-cropped detection (full-frame coords out). roi auto-tracks the
-            # rod; cold start / lost-blue falls back to a full-frame search.
-            yc_raw, bc, roi = detect_markers(frame, yl, yh, bl, bh,
-                                             (axis_x, axis_y), roi, ROI_MARGIN_PX)
+            # Detection on a downscaled copy (centroids returned in full coords).
+            yc_raw, bc = detect_markers(frame, yl, yh, bl, bh)
 
             # Spatial gate: drop a yellow blob too far from the axis (background
             # beige). yc_raw is kept for display so a rejection is visible.
