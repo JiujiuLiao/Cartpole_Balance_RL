@@ -187,48 +187,51 @@ def compute_angle(yellow, blue, axis):
     return None, "none"
 
 
-# -------------------- ROI tracking (speed-up; does NOT change the measurement) --------------------
+# -------------------- ROI crop (speed-up; does NOT change the measurement) --------------------
 # Run cvtColor + detect_centroid on a small crop instead of the whole frame.
-# The crop spans pivot(axis) -> blue tip, padded by ROI_MARGIN_PX, so it always
-# contains the whole rod (yellow sits between pivot and tip). Anchored on the
-# fixed pivot (camera-on-cart), so a momentarily-missed yellow never loses the
-# box. Blue is the anchor: if blue is lost in the crop, re-acquire full-frame.
-ROI_MARGIN_PX = 60     # padding each side (px). Smaller = faster but easier to lose track.
+# FIXED box: centred on the pivot (axis), half-size = blue-tip radius (rod length
+# in px) + margin, so it contains the whole swing circle. The box edges NEVER
+# move, so a marker that's visible is never clipped (a moving/tracking box was
+# clipping the fast-moving blue tip and causing angle jumps). The half-size
+# auto-grows from full-frame detections and never shrinks. If EITHER marker is
+# missing inside the crop, re-acquire on the full frame (so a clipped marker
+# never produces a wrong single-marker angle).
+ROI_MARGIN_PX = 60     # padding beyond the rod tip (px).
 
 
-def _roi_from_tip(axis, bc, shape, margin):
-    """Box spanning pivot->tip (contains the whole rod incl. yellow), padded."""
+def _fixed_box(axis, half, shape):
     h, w = shape[:2]
-    x0 = int(max(0, min(axis[0], bc[0]) - margin))
-    y0 = int(max(0, min(axis[1], bc[1]) - margin))
-    x1 = int(min(w, max(axis[0], bc[0]) + margin))
-    y1 = int(min(h, max(axis[1], bc[1]) + margin))
+    x0 = int(max(0, axis[0] - half)); y0 = int(max(0, axis[1] - half))
+    x1 = int(min(w, axis[0] + half)); y1 = int(min(h, axis[1] + half))
     if x1 - x0 < 4 or y1 - y0 < 4:
         return None
     return (x0, y0, x1, y1)
 
 
-def detect_markers(frame, yl, yh, bl, bh, axis, roi, margin):
-    """Detect yellow & blue centroids in FULL-FRAME coords. Uses the tracking
-    ROI crop when available, else (cold start / blue lost) a full-frame search.
-    Returns (yc_raw, bc, new_roi)."""
-    if roi is not None:
-        x0, y0, x1, y1 = roi
-        hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-        yc = detect_centroid(hsv, yl, yh)
-        bc = detect_centroid(hsv, bl, bh)
-        if bc is not None:                       # blue anchors the box
-            bc = (bc[0] + x0, bc[1] + y0)        # ★ local -> full-frame coords
-            if yc is not None:
-                yc = (yc[0] + x0, yc[1] + y0)
-            return yc, bc, _roi_from_tip(axis, bc, frame.shape, margin)
-        # blue lost inside the crop -> fall through to full-frame re-acquire
+def detect_markers(frame, yl, yh, bl, bh, axis, roi_half, margin):
+    """Detect yellow & blue centroids in FULL-FRAME coords using a fixed,
+    pivot-centred ROI crop. Requires BOTH markers inside the crop to trust it;
+    otherwise re-acquires on the full frame. roi_half auto-grows (never shrinks).
+    Returns (yc_raw, bc, roi_half)."""
+    if roi_half is not None:
+        box = _fixed_box(axis, roi_half, frame.shape)
+        if box is not None:
+            x0, y0, x1, y1 = box
+            hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+            yc = detect_centroid(hsv, yl, yh)
+            bc = detect_centroid(hsv, bl, bh)
+            if yc is not None and bc is not None:       # both clean -> trust crop
+                return ((yc[0] + x0, yc[1] + y0),       # ★ local -> full coords
+                        (bc[0] + x0, bc[1] + y0), roi_half)
+            # a marker missing -> re-acquire full frame (avoid clipped single-marker)
 
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # full frame (cold start / miss)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)         # full frame
     yc = detect_centroid(hsv, yl, yh)
     bc = detect_centroid(hsv, bl, bh)
-    new_roi = _roi_from_tip(axis, bc, frame.shape, margin) if bc is not None else None
-    return yc, bc, new_roi
+    if bc is not None:                                  # blue tip defines the radius
+        r = math.hypot(bc[0] - axis[0], bc[1] - axis[1]) + margin
+        roi_half = r if roi_half is None else max(roi_half, r)
+    return yc, bc, roi_half
 
 
 def unwrap(prev, current):
