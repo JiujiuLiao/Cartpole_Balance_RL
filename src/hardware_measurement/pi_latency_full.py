@@ -68,7 +68,8 @@ import cv2  # noqa: E402  (kept explicit; V3 also imports it)
 # Importing the module only defines functions/constants — main() is guarded by
 # __name__ == "__main__", so no camera/ZMQ/argparse runs on import.
 from camerapreview_detect_color_V3 import (   # noqa: E402
-    detect_centroid, compute_angle, load_hsv, load_axis,
+    detect_centroid, compute_angle, detect_markers, ROI_MARGIN_PX,
+    load_hsv, load_axis,
     W, H, RAW_W, RAW_H, FRAME_DURATION_US, EXPOSURE_US,
     ANALOGUE_GAIN, LENS_POSITION,
 )
@@ -154,6 +155,7 @@ def main():
     lat0, lat1, lat2, lat3, lat4, exps = [], [], [], [], [], []
     skipped = 0
     n = 0
+    roi = None            # ROI tracking state (mirrors the V3 pipeline)
 
     try:
         while n < N_SAMPLES:
@@ -172,11 +174,9 @@ def main():
                 break
             l0 = (now_ns - ts_sensor) / 1e6              # ms
 
-            # ── ① Image processing (REAL V3 pipeline) ─────────────
+            # ── ① Image processing (REAL V3 pipeline, ROI-cropped) ─
             s0 = time.perf_counter()
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            yc = detect_centroid(hsv, yl, yh)
-            bc = detect_centroid(hsv, bl, bh)
+            yc, bc, roi = detect_markers(frame, yl, yh, bl, bh, axis, roi, ROI_MARGIN_PX)
             angle_raw, mode = compute_angle(yc, bc, axis)
             s1 = time.perf_counter()
             if angle_raw is None:

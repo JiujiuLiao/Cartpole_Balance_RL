@@ -187,6 +187,50 @@ def compute_angle(yellow, blue, axis):
     return None, "none"
 
 
+# -------------------- ROI tracking (speed-up; does NOT change the measurement) --------------------
+# Run cvtColor + detect_centroid on a small crop instead of the whole frame.
+# The crop spans pivot(axis) -> blue tip, padded by ROI_MARGIN_PX, so it always
+# contains the whole rod (yellow sits between pivot and tip). Anchored on the
+# fixed pivot (camera-on-cart), so a momentarily-missed yellow never loses the
+# box. Blue is the anchor: if blue is lost in the crop, re-acquire full-frame.
+ROI_MARGIN_PX = 60     # padding each side (px). Smaller = faster but easier to lose track.
+
+
+def _roi_from_tip(axis, bc, shape, margin):
+    """Box spanning pivot->tip (contains the whole rod incl. yellow), padded."""
+    h, w = shape[:2]
+    x0 = int(max(0, min(axis[0], bc[0]) - margin))
+    y0 = int(max(0, min(axis[1], bc[1]) - margin))
+    x1 = int(min(w, max(axis[0], bc[0]) + margin))
+    y1 = int(min(h, max(axis[1], bc[1]) + margin))
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    return (x0, y0, x1, y1)
+
+
+def detect_markers(frame, yl, yh, bl, bh, axis, roi, margin):
+    """Detect yellow & blue centroids in FULL-FRAME coords. Uses the tracking
+    ROI crop when available, else (cold start / blue lost) a full-frame search.
+    Returns (yc_raw, bc, new_roi)."""
+    if roi is not None:
+        x0, y0, x1, y1 = roi
+        hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+        yc = detect_centroid(hsv, yl, yh)
+        bc = detect_centroid(hsv, bl, bh)
+        if bc is not None:                       # blue anchors the box
+            bc = (bc[0] + x0, bc[1] + y0)        # ★ local -> full-frame coords
+            if yc is not None:
+                yc = (yc[0] + x0, yc[1] + y0)
+            return yc, bc, _roi_from_tip(axis, bc, frame.shape, margin)
+        # blue lost inside the crop -> fall through to full-frame re-acquire
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)  # full frame (cold start / miss)
+    yc = detect_centroid(hsv, yl, yh)
+    bc = detect_centroid(hsv, bl, bh)
+    new_roi = _roi_from_tip(axis, bc, frame.shape, margin) if bc is not None else None
+    return yc, bc, new_roi
+
+
 def unwrap(prev, current):
     if prev is None:
         return current
@@ -312,6 +356,7 @@ def main():
 
     angle_prev = None
     omega_filt = 0.0
+    roi = None                      # ROI tracking state (None = full-frame search)
     t_prev = time.perf_counter()
     fps_t0 = t_prev
     fps_n = 0
@@ -337,9 +382,10 @@ def main():
             if tuner_open:
                 read_hsv_tuner(yl, yh, bl, bh)
 
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            yc_raw = detect_centroid(hsv, yl, yh)
-            bc = detect_centroid(hsv, bl, bh)
+            # ROI-cropped detection (full-frame coords out). roi auto-tracks the
+            # rod; cold start / lost-blue falls back to a full-frame search.
+            yc_raw, bc, roi = detect_markers(frame, yl, yh, bl, bh,
+                                             (axis_x, axis_y), roi, ROI_MARGIN_PX)
 
             # Spatial gate: drop a yellow blob too far from the axis (background
             # beige). yc_raw is kept for display so a rejection is visible.
