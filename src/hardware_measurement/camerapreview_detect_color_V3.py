@@ -131,8 +131,10 @@ def save_hsv(yl, yh, bl, bh):
 
 # -------------------- Detection --------------------
 
-def detect_centroid(hsv, lo, hi):
+def detect_centroid(hsv, lo, hi, min_area=None):
     """Return (cx, cy) of the largest valid blob in HSV range, or None."""
+    if min_area is None:
+        min_area = MIN_AREA_PX
     mask = cv2.inRange(hsv, lo, hi)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL)
@@ -140,7 +142,7 @@ def detect_centroid(hsv, lo, hi):
     if not contours:
         return None
     c = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(c) < MIN_AREA_PX:
+    if cv2.contourArea(c) < min_area:
         return None
     M = cv2.moments(c)
     if M["m00"] == 0:
@@ -187,74 +189,32 @@ def compute_angle(yellow, blue, axis):
     return None, "none"
 
 
-# -------------------- ROI crop (speed-up; does NOT change the measurement) --------------------
-# Run cvtColor + detect_centroid on a SMALL crop that tracks the rod (bounding
-# box of the two markers + margin). A small crop gives a big speed-up even when
-# the rod fills most of the frame (a fixed full-swing box would be ~the whole
-# frame and save nothing). Two guards kill the angle-jump bug:
-#   1. require BOTH markers in the crop (else full-frame) -> a missing marker
-#      never falls back to a wrong single-marker angle;
-#   2. reject a blob whose bounding box TOUCHES the crop border (it is being
-#      clipped -> its centroid is shifted) and re-acquire on the full frame.
-ROI_MARGIN_PX = 60     # crop padding around the two markers (px).
+# -------------------- Downscaled detection (speed-up; coarser but simple) --------------------
+# Run cvtColor + detect_centroid on a downscaled copy of the frame, then scale
+# the centroids back to full-frame coordinates. Fewer pixels -> faster; the
+# measurement (gate / compute_angle / axis) is UNCHANGED because the centroids
+# come back in full-frame coords. (Replaces the old ROI cropping.)
+DETECT_SCALE = 0.5     # 0.5 -> detect on 384x216. Lower = faster but coarser angle.
 
 
-def _detect_in_crop(hsv, lo, hi, cw, ch):
-    """Centroid (crop coords) of the largest in-range blob, or None if not found
-    OR the blob touches the crop border (likely clipped -> unreliable)."""
-    mask = cv2.inRange(hsv, lo, hi)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-    c = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(c) < MIN_AREA_PX:
-        return None
-    bx, by, bw, bh = cv2.boundingRect(c)
-    if bx <= 0 or by <= 0 or bx + bw >= cw or by + bh >= ch:
-        return None                      # touches crop edge -> clipped -> reject
-    M = cv2.moments(c)
-    if M["m00"] == 0:
-        return None
-    return (M["m10"] / M["m00"], M["m01"] / M["m00"])
-
-
-def _roi_from_both(yc, bc, shape, margin):
-    """Crop box = bounding box of the two markers, padded; clamped to frame."""
-    h, w = shape[:2]
-    x0 = int(max(0, min(yc[0], bc[0]) - margin))
-    y0 = int(max(0, min(yc[1], bc[1]) - margin))
-    x1 = int(min(w, max(yc[0], bc[0]) + margin))
-    y1 = int(min(h, max(yc[1], bc[1]) + margin))
-    if x1 - x0 < 4 or y1 - y0 < 4:
-        return None
-    return (x0, y0, x1, y1)
-
-
-def detect_markers(frame, yl, yh, bl, bh, axis, roi, margin):
-    """Detect yellow & blue centroids in FULL-FRAME coords using a marker-tracking
-    crop. Requires BOTH markers, un-clipped, inside the crop to trust it; else
-    re-acquires on the full frame. Returns (yc_raw, bc, new_roi)."""
-    if roi is not None:
-        x0, y0, x1, y1 = roi
-        crop = frame[y0:y1, x0:x1]
-        ch, cw = crop.shape[:2]
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        yc = _detect_in_crop(hsv, yl, yh, cw, ch)
-        bc = _detect_in_crop(hsv, bl, bh, cw, ch)
-        if yc is not None and bc is not None:           # both clean & un-clipped
-            yc = (yc[0] + x0, yc[1] + y0)               # ★ local -> full coords
-            bc = (bc[0] + x0, bc[1] + y0)
-            return yc, bc, _roi_from_both(yc, bc, frame.shape, margin)
-        # missing or clipped -> re-acquire on the full frame
-
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)         # full frame
-    yc = detect_centroid(hsv, yl, yh)
-    bc = detect_centroid(hsv, bl, bh)
-    new_roi = (_roi_from_both(yc, bc, frame.shape, margin)
-               if (yc is not None and bc is not None) else None)
-    return yc, bc, new_roi
+def detect_markers(frame, yl, yh, bl, bh):
+    """Detect yellow & blue centroids in FULL-FRAME coords by detecting on a
+    downscaled copy. Returns (yc_raw, bc)."""
+    if DETECT_SCALE != 1.0:
+        small = cv2.resize(frame, None, fx=DETECT_SCALE, fy=DETECT_SCALE,
+                           interpolation=cv2.INTER_AREA)
+        min_area = MIN_AREA_PX * DETECT_SCALE * DETECT_SCALE   # blob shrinks by scale^2
+        inv = 1.0 / DETECT_SCALE
+    else:
+        small, min_area, inv = frame, MIN_AREA_PX, 1.0
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    yc = detect_centroid(hsv, yl, yh, min_area)
+    bc = detect_centroid(hsv, bl, bh, min_area)
+    if yc is not None:
+        yc = (yc[0] * inv, yc[1] * inv)        # scaled -> full-frame coords
+    if bc is not None:
+        bc = (bc[0] * inv, bc[1] * inv)
+    return yc, bc
 
 
 def unwrap(prev, current):
@@ -382,7 +342,6 @@ def main():
 
     angle_prev = None
     omega_filt = 0.0
-    roi = None                      # ROI tracking state (None = full-frame search)
     t_prev = time.perf_counter()
     fps_t0 = t_prev
     fps_n = 0
@@ -408,10 +367,8 @@ def main():
             if tuner_open:
                 read_hsv_tuner(yl, yh, bl, bh)
 
-            # ROI-cropped detection (full-frame coords out). roi auto-tracks the
-            # rod; cold start / lost-blue falls back to a full-frame search.
-            yc_raw, bc, roi = detect_markers(frame, yl, yh, bl, bh,
-                                             (axis_x, axis_y), roi, ROI_MARGIN_PX)
+            # Detection on a downscaled copy (centroids returned in full coords).
+            yc_raw, bc = detect_markers(frame, yl, yh, bl, bh)
 
             # Spatial gate: drop a yellow blob too far from the axis (background
             # beige). yc_raw is kept for display so a rejection is visible.
