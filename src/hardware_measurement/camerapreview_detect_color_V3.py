@@ -75,7 +75,7 @@ MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 # frame (~12.7 px/cm) assuming the paddle centroid sits <~9 cm from the pivot.
 YELLOW_MAX_AXIS_DIST_PX = 320
 
-OMEGA_LPF_ALPHA = 0.35           # EMA: ~3-frame time constant @120fps (~25ms)
+OMEGA_LPF_ALPHA = 0.55           # EMA: ~3-frame time constant @120fps (~25ms)
 
 AXIS_CALIB_FILE = "axis_calib.json"
 HSV_CALIB_FILE = "hsv_calib.json"
