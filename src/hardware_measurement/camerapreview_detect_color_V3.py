@@ -188,50 +188,73 @@ def compute_angle(yellow, blue, axis):
 
 
 # -------------------- ROI crop (speed-up; does NOT change the measurement) --------------------
-# Run cvtColor + detect_centroid on a small crop instead of the whole frame.
-# FIXED box: centred on the pivot (axis), half-size = blue-tip radius (rod length
-# in px) + margin, so it contains the whole swing circle. The box edges NEVER
-# move, so a marker that's visible is never clipped (a moving/tracking box was
-# clipping the fast-moving blue tip and causing angle jumps). The half-size
-# auto-grows from full-frame detections and never shrinks. If EITHER marker is
-# missing inside the crop, re-acquire on the full frame (so a clipped marker
-# never produces a wrong single-marker angle).
-ROI_MARGIN_PX = 60     # padding beyond the rod tip (px).
+# Run cvtColor + detect_centroid on a SMALL crop that tracks the rod (bounding
+# box of the two markers + margin). A small crop gives a big speed-up even when
+# the rod fills most of the frame (a fixed full-swing box would be ~the whole
+# frame and save nothing). Two guards kill the angle-jump bug:
+#   1. require BOTH markers in the crop (else full-frame) -> a missing marker
+#      never falls back to a wrong single-marker angle;
+#   2. reject a blob whose bounding box TOUCHES the crop border (it is being
+#      clipped -> its centroid is shifted) and re-acquire on the full frame.
+ROI_MARGIN_PX = 60     # crop padding around the two markers (px).
 
 
-def _fixed_box(axis, half, shape):
+def _detect_in_crop(hsv, lo, hi, cw, ch):
+    """Centroid (crop coords) of the largest in-range blob, or None if not found
+    OR the blob touches the crop border (likely clipped -> unreliable)."""
+    mask = cv2.inRange(hsv, lo, hi)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    c = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(c) < MIN_AREA_PX:
+        return None
+    bx, by, bw, bh = cv2.boundingRect(c)
+    if bx <= 0 or by <= 0 or bx + bw >= cw or by + bh >= ch:
+        return None                      # touches crop edge -> clipped -> reject
+    M = cv2.moments(c)
+    if M["m00"] == 0:
+        return None
+    return (M["m10"] / M["m00"], M["m01"] / M["m00"])
+
+
+def _roi_from_both(yc, bc, shape, margin):
+    """Crop box = bounding box of the two markers, padded; clamped to frame."""
     h, w = shape[:2]
-    x0 = int(max(0, axis[0] - half)); y0 = int(max(0, axis[1] - half))
-    x1 = int(min(w, axis[0] + half)); y1 = int(min(h, axis[1] + half))
+    x0 = int(max(0, min(yc[0], bc[0]) - margin))
+    y0 = int(max(0, min(yc[1], bc[1]) - margin))
+    x1 = int(min(w, max(yc[0], bc[0]) + margin))
+    y1 = int(min(h, max(yc[1], bc[1]) + margin))
     if x1 - x0 < 4 or y1 - y0 < 4:
         return None
     return (x0, y0, x1, y1)
 
 
-def detect_markers(frame, yl, yh, bl, bh, axis, roi_half, margin):
-    """Detect yellow & blue centroids in FULL-FRAME coords using a fixed,
-    pivot-centred ROI crop. Requires BOTH markers inside the crop to trust it;
-    otherwise re-acquires on the full frame. roi_half auto-grows (never shrinks).
-    Returns (yc_raw, bc, roi_half)."""
-    if roi_half is not None:
-        box = _fixed_box(axis, roi_half, frame.shape)
-        if box is not None:
-            x0, y0, x1, y1 = box
-            hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-            yc = detect_centroid(hsv, yl, yh)
-            bc = detect_centroid(hsv, bl, bh)
-            if yc is not None and bc is not None:       # both clean -> trust crop
-                return ((yc[0] + x0, yc[1] + y0),       # ★ local -> full coords
-                        (bc[0] + x0, bc[1] + y0), roi_half)
-            # a marker missing -> re-acquire full frame (avoid clipped single-marker)
+def detect_markers(frame, yl, yh, bl, bh, axis, roi, margin):
+    """Detect yellow & blue centroids in FULL-FRAME coords using a marker-tracking
+    crop. Requires BOTH markers, un-clipped, inside the crop to trust it; else
+    re-acquires on the full frame. Returns (yc_raw, bc, new_roi)."""
+    if roi is not None:
+        x0, y0, x1, y1 = roi
+        crop = frame[y0:y1, x0:x1]
+        ch, cw = crop.shape[:2]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        yc = _detect_in_crop(hsv, yl, yh, cw, ch)
+        bc = _detect_in_crop(hsv, bl, bh, cw, ch)
+        if yc is not None and bc is not None:           # both clean & un-clipped
+            yc = (yc[0] + x0, yc[1] + y0)               # ★ local -> full coords
+            bc = (bc[0] + x0, bc[1] + y0)
+            return yc, bc, _roi_from_both(yc, bc, frame.shape, margin)
+        # missing or clipped -> re-acquire on the full frame
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)         # full frame
     yc = detect_centroid(hsv, yl, yh)
     bc = detect_centroid(hsv, bl, bh)
-    if bc is not None:                                  # blue tip defines the radius
-        r = math.hypot(bc[0] - axis[0], bc[1] - axis[1]) + margin
-        roi_half = r if roi_half is None else max(roi_half, r)
-    return yc, bc, roi_half
+    new_roi = (_roi_from_both(yc, bc, frame.shape, margin)
+               if (yc is not None and bc is not None) else None)
+    return yc, bc, new_roi
 
 
 def unwrap(prev, current):
