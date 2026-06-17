@@ -46,9 +46,8 @@ except ImportError:
     SERIAL_OK = False
 
 from camera_comm import CameraSubscriber
-from config import DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR
-from balance_pid import (Kp, Kd, Kx, ANGLE_SIGN, OMEGA_SIGN, CART_SIGN,
-                         PWM_LIMIT, angle_error)
+from config import (DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
+                    Kp, Kd, Kx, ANGLE_SIGN, OMEGA_SIGN, CART_SIGN, PWM_LIMIT)
 
 # ── Configuration ─────────────────────────────────
 SERIAL_PORT  = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
@@ -146,7 +145,7 @@ def main():
             t_pid_start = time.time()
             theta_deg = float(parts[4]) * 57.2958
             omega     = float(parts[5])
-            err  = angle_error(theta_deg)
+            err  = theta_deg     # camera convention: upright = 0°
             _pwm = (ANGLE_SIGN * (-Kp * err)
                   + OMEGA_SIGN * ( Kd * omega))
             # Kx * cart_pos omitted: cart position not read at this point

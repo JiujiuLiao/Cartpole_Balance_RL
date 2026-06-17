@@ -119,6 +119,13 @@ python  src/analyze_swingup.py        # offline analysis
   - `test_*`     → one-off probe / smoke test
   - `analyze_*`  → offline post-processing
   - `measure_*`  → hardware calibration
+  - **Controllers (algorithm bare-name = library; verb-prefix = tool)**:
+    - `balance_<algo>.py`         → controller library, called by swing-up
+                                     (e.g. `balance_pd.py`, `balance_lqr.py`)
+    - `tune_balance_<algo>.py`    → standalone interactive tuner for that controller
+                                     (e.g. `tune_balance_pd.py`)
+    - `compute_<algo>_*.py`       → offline math tool that produces gains/matrices
+                                     (e.g. `compute_lqr_K.py`)
 
 ---
 
@@ -137,7 +144,6 @@ These files still build but belong to the old PC-loop architecture.
 Do not add features to them. New work goes in `pi/pi_balance.py`.
 
 - `src/camera_comm.py`
-- `src/balance_pid.py`
 - `src/camerapreview_detect_color2.py`
 - `cartpole/Communicator.py` (superseded by `src/motor_comm.py`)
 - everything under `achive/`

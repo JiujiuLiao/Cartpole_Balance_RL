@@ -25,12 +25,11 @@ import os
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber
 from balance_lqr import balance_lqr_loop
+from balance_pd import balance_pd_loop
 from config import (
     DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
     GRAVITY, PENDULUM_L_M, M_PER_PULSE, MAX_PULSES,
-    PWM_DEADBAND, PWM_LIMIT, GIVEUP_ANGLE_DEG,
-    # Balance PD gains (shared with balance_pid.py via config)
-    Kp, Kd, Kx, ANGLE_SIGN, OMEGA_SIGN, CART_SIGN,
+    PWM_DEADBAND, GIVEUP_ANGLE_DEG,
 )
 
 # ── Connections ───────────────────────────────────────────────────────
@@ -62,7 +61,7 @@ POS_EVERY = 10            # check cart position every N cycles (saves time)
 
 # 2026-06-05: which balance controller to invoke after a clean catch.
 # True  → balance_lqr.balance_lqr_loop  (LQR full-state feedback, gains in balance_lqr.py)
-# False → balance_loop                  (PD + cart-pos, gains in config.py)
+# False → balance_pd.balance_pd_loop    (PD + cart-pos,           gains in config.py)
 USE_LQR_BALANCE = True
 
 
@@ -112,90 +111,6 @@ def compute_pwm(theta, omega, cart_pos):
     center_correction = -0.40 * SWING_PWM * (cart_pos / MAX_PULSES)
     total_pwm = max(-255, min(255, int(base_pwm + center_correction)))
     return total_pwm
-
-
-# ── Inline balance PD (runs after catch, in the same process) ────────
-BALANCE_HZ      = 100
-BALANCE_DT      = 1.0 / BALANCE_HZ
-BAL_POS_EVERY_N = 5     # 20 Hz cart polling at 100 Hz loop (less serial load)
-
-
-def balance_loop(comm, cam, t0, log_writer):
-    """
-    PD + cart-pos balance, inline. Runs until pendulum falls past
-    ±GIVEUP_ANGLE_DEG or cart hits ±MAX_PULSES.
-
-    Returns:
-      'fall'      — pendulum tilted past giveup; caller should re-attempt swing-up
-      'boundary'  — cart hit a hard limit; caller should stop
-      'interrupt' — KeyboardInterrupt
-    """
-    GIVEUP_RAD = math.radians(GIVEUP_ANGLE_DEG)
-
-    pos       = comm.get_position()
-    pos_count = 0
-    t_next    = time.time() + BALANCE_DT
-
-    print(f"\n  --- BALANCE MODE (Kp={Kp} Kd={Kd} Kx={Kx}) ---")
-    print(f"  Will give up if |θ|>{GIVEUP_ANGLE_DEG}° or |cart|>{MAX_PULSES} pulses.")
-
-    last_print = 0.0
-    try:
-        while True:
-            now = time.time()
-            sleep_t = t_next - now
-            if sleep_t > 0:
-                time.sleep(sleep_t)
-            t_next += BALANCE_DT
-
-            result = cam.latest_angle()
-            if result is None:
-                continue
-            theta_rad, omega, _pole_up = result
-            theta_deg = math.degrees(theta_rad)
-
-            # ---- Safety: pendulum fell ----
-            if abs(theta_deg) > GIVEUP_ANGLE_DEG:
-                comm.send_velocity(0)
-                print(f"\n  [BAL] FELL  θ={theta_deg:+.1f}°  ω={omega:+.2f} rad/s")
-                return 'fall'
-
-            # ---- Cart position (subsampled) ----
-            pos_count += 1
-            if pos_count >= BAL_POS_EVERY_N:
-                pos = comm.get_position()
-                pos_count = 0
-                if abs(pos) > MAX_PULSES:
-                    comm.send_velocity(0)
-                    print(f"\n  [BAL] CART BOUNDARY pos={pos}")
-                    return 'boundary'
-
-            # ---- PD + cart-pos drift correction ----
-            err = theta_deg     # camera convention: upright = 0°
-            pwm = (ANGLE_SIGN * (-Kp * err)
-                 + OMEGA_SIGN * ( Kd * omega)
-                 -  CART_SIGN * ( Kx * pos))
-
-            # Deadband compensation
-            if pwm != 0 and abs(pwm) < PWM_DEADBAND:
-                pwm = PWM_DEADBAND if pwm > 0 else -PWM_DEADBAND
-            pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, pwm)))
-
-            comm.send_velocity(pwm)
-
-            # ---- Log every loop, print every ~200ms ----
-            t = time.time() - t0
-            log_writer.writerow([f"{t:.4f}", f"{theta_deg:.2f}", f"{omega:.4f}",
-                                  "0.0000", pwm, pos])
-            if t - last_print > 0.2:
-                print(f"  {t:5.2f}  [BAL] θ={theta_deg:+6.1f}  ω={omega:+6.2f}  "
-                      f"pwm={pwm:+5}  pos={pos:+5}")
-                last_print = t
-
-    except KeyboardInterrupt:
-        comm.send_velocity(0)
-        print("\n  [BAL] interrupted")
-        return 'interrupt'
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -300,7 +215,7 @@ def main():
                 print("  Handing off to inline balance (no process switch).")
                 # Run balance in this same process so we don't lose control
                 # during a process-start gap (pendulum falls in <100ms).
-                balance_fn = balance_lqr_loop if USE_LQR_BALANCE else balance_loop
+                balance_fn = balance_lqr_loop if USE_LQR_BALANCE else balance_pd_loop
                 bal_result = balance_fn(comm, cam, t0, log_writer)
                 if bal_result == 'fall':
                     # Pendulum fell — let outer loop resume swing-up from current state.
