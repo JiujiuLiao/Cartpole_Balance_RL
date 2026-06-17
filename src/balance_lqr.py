@@ -41,7 +41,7 @@ K_X_DOT      = -25.3450    # cart-velocity gain
 PWM_SIGN = -1
 
 # Control loop
-CTRL_HZ            = 50
+CTRL_HZ            = 120
 DT                 = 1.0 / CTRL_HZ
 
 # Cart velocity estimate

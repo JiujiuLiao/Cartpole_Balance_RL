@@ -18,7 +18,7 @@ import os
 import numpy as np
 
 # ── 参数 ──────────────────────────────────────────
-DEFAULT_FILE    = "pendulum_data.csv"
+DEFAULT_FILE    = "pendulum_20260617_142550.csv"
 MIN_PEAK_HEIGHT = 0.05   # 最小峰值（弧度），过滤噪声，约 3°
 MIN_PEAK_DIST   = 0.3    # 两个峰之间最短间隔（秒），防止误检
 # ──────────────────────────────────────────────────
