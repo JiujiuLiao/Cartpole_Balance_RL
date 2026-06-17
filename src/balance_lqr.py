@@ -59,7 +59,7 @@ CART_VEL_LPF_ALPHA = 0.30     # EMA on raw (Δpos/Δt) — high = more responsiv
 # Level-2 observer would include it. Safety/giveup still uses MEASURED theta.
 PREDICT_ENABLE = True
 T_DELAY        = 0.043     # s, sensor->actuation latency (tune: glass->motion 43-57ms)
-GRAV_OVER_LEFF = 30.7      # g/l_eff = 9.81/0.32 (l_eff from measured inertia)
+GRAV_OVER_LEFF = 28.85      # g/l_eff = 9.81/0.34 (l_eff from measured inertia)
 
 
 def _deadband(pwm):
@@ -99,6 +99,16 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     t_next     = time.time() + DT
     last_print = 0.0
 
+    # --- loop-rate diagnostics (remove once tuned) -------------------
+    # Tells us WHO gates the rate: the 100 Hz loop, the camera feed, or
+    # the serial get_position() call.
+    diag_t0     = time.time()
+    diag_ticks  = 0      # every while iteration (incl. None-frame skips)
+    diag_frames = 0      # iterations that got a FRESH vision frame
+    diag_none   = 0      # iterations where vision was None -> continue
+    diag_gp_sum = 0.0    # total seconds spent inside get_position()
+    diag_gp_n   = 0      # number of get_position() calls
+
     try:
         while True:
             # ---- pace loop ------------------------------------------
@@ -108,10 +118,29 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                 time.sleep(sleep_t)
             t_next += DT
 
+            # ---- loop-rate diagnostics (remove once tuned) ----------
+            diag_ticks += 1
+            now_d = time.time()
+            if now_d - diag_t0 >= 1.0:
+                el    = now_d - diag_t0
+                gp_ms = (diag_gp_sum / diag_gp_n * 1000.0) if diag_gp_n else 0.0
+                print(f"  [diag] loop={diag_ticks/el:4.0f}Hz  "
+                      f"vision={diag_frames/el:4.0f}Hz  "
+                      f"none={diag_none/el:4.0f}Hz  "
+                      f"get_pos={gp_ms:4.1f}ms")
+                diag_t0     = now_d
+                diag_ticks  = 0
+                diag_frames = 0
+                diag_none   = 0
+                diag_gp_sum = 0.0
+                diag_gp_n   = 0
+
             # ---- pull latest vision --------------------------------
             result = cam.latest_angle()
             if result is None:
+                diag_none += 1
                 continue
+            diag_frames += 1
             theta_rad, omega, _pole_up = result
             theta_deg = math.degrees(theta_rad)
 
@@ -125,7 +154,10 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             cart_poll_count += 1
             if cart_poll_count >= CART_POLL_EVERY_N:
                 cart_poll_count = 0
+                _t_gp           = time.time()
                 pos             = comm.get_position()
+                diag_gp_sum    += time.time() - _t_gp
+                diag_gp_n      += 1
                 cart_pos_m      = pos * M_PER_PULSE
 
                 t_cart = time.time()

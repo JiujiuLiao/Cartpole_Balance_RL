@@ -80,26 +80,27 @@ try:
 
         parts = msg.split(",")
 
-        # ZMQ format (9 fields after Pi modification):
+        # ZMQ format — current cameras (V3, color2_henry) send 8 fields:
         #   parts[0~4] : angles (queue, oldest to newest, rad, 0=up, pi=down)
         #   parts[5]   : angle_velocity_avg (rad/s)
         #   parts[6]   : pole_up (1 if near upright)
-        #   parts[7]   : start        (Pi timestamp: loop start, before capture)
-        #   parts[8]   : current_time (Pi timestamp: angle computed, ready to send)
-        if len(parts) < 9:
+        #   parts[7]   : timestamp (V3: time.time_ns(); color2: loop start)
+        # (the old 9-field format with a 2nd timestamp at parts[8] no longer exists;
+        #  requiring 9 here silently dropped EVERY frame → 0 samples recorded.)
+        if len(parts) < 8:
             continue
 
         try:
-            # Use current_time (parts[8]): timestamp when angle was computed —
-            # more accurate than start (parts[7]) which is before frame capture.
-            timestamp       = float(parts[8])
             angle_raw       = float(parts[4])   # most recent angle (rad)
             angle_velocity  = float(parts[5])   # average angular velocity (rad/s)
         except ValueError:
             continue
 
-        # Compute elapsed time using only Pi timestamps to avoid cross-device
-        # clock mismatch (Pi time - PC time would introduce offset error).
+        # This script runs ON the Pi receiving from the LOCAL camera, so the local
+        # receive time is accurate enough for period/damping ID (recv jitter ~ms vs
+        # pendulum period ~1-2 s = negligible). Using it avoids the field-index /
+        # unit ambiguity of the embedded camera timestamp (ns vs s, parts[7] vs [8]).
+        timestamp = time.time()
         if first_timestamp is None:
             first_timestamp = timestamp
         elapsed = timestamp - first_timestamp

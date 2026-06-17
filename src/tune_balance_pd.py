@@ -1,6 +1,12 @@
 """
-balance_pid.py — DC inverted pendulum, PD + cart-pos drift correction.
+tune_balance_pd.py — Standalone PD tuner for DC inverted pendulum balance.
 ========================================================================
+Use this to find good Kp/Kd/Kx by hand, then copy the winners into
+`config.py` so `balance_pd.py` (called by swing-up) picks them up.
+
+Pairs with `balance_pd.py` (library) — same control law, different entry.
+
+
 TWO-PROCESS architecture, both ON the Raspberry Pi:
     Terminal 1:  python3 hardware_measurement/camerapreview_detect_color_V3.py
                  -> vision (verified correct), PUBs theta/omega/pole_up on :9999

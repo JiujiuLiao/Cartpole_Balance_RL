@@ -137,7 +137,7 @@ else:
 print()
 
 # ── 用于 swing_up_energy.py 的参数 ───────────────
- L_eff = 3 * 9.81 / (2 * omega0**2)   # 从 ω₀ 反推等效摆长
+L_eff = 3 * 9.81 / (2 * omega0**2)   # 从 ω₀ 反推等效摆长（均匀杆假设，见下注）
 print("── 给 swing_up_energy.py 用的参数 ───────────")
 print(f"  HALF_PERIOD   = {T/2:.3f}   # 给 swing_up.py 用")
 print(f"  omega0        = {omega0:.4f}  # 自然频率")
