@@ -39,10 +39,10 @@ K_X_DOT      = -25.3450    # cart-velocity gain
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
 # way on the very first balance attempt.
-PWM_SIGN = -1
+PWM_SIGN = +1
 
 # Control loop
-CTRL_HZ            = 120
+CTRL_HZ            = 100
 DT                 = 1.0 / CTRL_HZ
 
 # Cart velocity estimate
@@ -69,7 +69,7 @@ GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, 
 # Why: camera ω (1-frame diff + EMA) noise ~0.6 rad/s × K_θ̇(307) ≈ ±184 PWM of
 # PURE noise → PWM saturates from noise alone (proven in swingup_..._145909.csv).
 # The EKF infers ω from the physics, killing most of that noise term.
-USE_EKF         = False     # master switch; set False to revert to raw camera ω
+USE_EKF         = True     # master switch; set False to revert to raw camera ω
 EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
                            #   ↑ trust camera more (faster, noisier)
                            #   ↓ trust model more (smoother, more lag)
@@ -148,7 +148,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             # ---- loop-rate diagnostics (remove once tuned) ----------
             diag_ticks += 1
             now_d = time.time()
-            if now_d - diag_t0 >= 1.0:
+            if now_d - diag_t0 >= 0.008:
                 el    = now_d - diag_t0
                 gp_ms = (diag_gp_sum / diag_gp_n * 1000.0) if diag_gp_n else 0.0
                 print(f"  [diag] loop={diag_ticks/el:4.0f}Hz  "
@@ -171,6 +171,8 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             if result is not None:
                 diag_frames += 1
                 theta_meas, omega_meas, _pole_up = result
+                theta_meas = -theta_meas
+                omega_meas = -omega_meas
             else:
                 diag_none += 1
                 theta_meas, omega_meas = None, None
