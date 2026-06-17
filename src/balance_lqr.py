@@ -69,7 +69,7 @@ GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, 
 # Why: camera ω (1-frame diff + EMA) noise ~0.6 rad/s × K_θ̇(307) ≈ ±184 PWM of
 # PURE noise → PWM saturates from noise alone (proven in swingup_..._145909.csv).
 # The EKF infers ω from the physics, killing most of that noise term.
-USE_EKF         = True     # master switch; set False to revert to raw camera ω
+USE_EKF         = False     # master switch; set False to revert to raw camera ω
 EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
                            #   ↑ trust camera more (faster, noisier)
                            #   ↓ trust model more (smoother, more lag)
