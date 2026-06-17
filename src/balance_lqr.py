@@ -23,6 +23,7 @@ import time
 from config import (
     M_PER_PULSE, MAX_PULSES, PWM_DEADBAND, PWM_LIMIT, GIVEUP_ANGLE_DEG,
 )
+from ekf import PendulumEKF
 
 # ----------------------------------------------------------------------
 # LQR GAINS  ←  paste from compute_lqr_K.py output
@@ -64,6 +65,19 @@ GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, 
                             # 你的摆有配重 → 真身 = m·g·d/I_pivot = ω₀² ≈ 31.5,
                             # 等效 g/l_eff, l_eff≈0.31m. 旧值 28.85 偏低~9%, 已弃.
 
+# ── EKF state estimator (clean ω; replaces camera diff+EMA) ────────────
+# Why: camera ω (1-frame diff + EMA) noise ~0.6 rad/s × K_θ̇(307) ≈ ±184 PWM of
+# PURE noise → PWM saturates from noise alone (proven in swingup_..._145909.csv).
+# The EKF infers ω from the physics, killing most of that noise term.
+USE_EKF         = True     # master switch; set False to revert to raw camera ω
+EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
+                           #   ↑ trust camera more (faster, noisier)
+                           #   ↓ trust model more (smoother, more lag)
+EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈1.1°).
+                           #   TODO: measure from a static recording, set exact.
+EKF_INPUT_GAIN  = 0.0      # b = PWM→angular-accel. 0 = ignore motor in the model
+                           #   (fine for now); calibrate later, then set here.
+
 
 def _deadband(pwm):
     if pwm == 0:
@@ -87,6 +101,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     """
     print(f"\n  --- BALANCE LQR (K=[{K_THETA:+.1f}, {K_THETA_DOT:+.1f}, "
           f"{K_X:+.2f}, {K_X_DOT:+.1f}]) ---")
+    print(f"  state estimator: {'EKF (clean ω, grav_coef=%.1f)' % GRAV_OVER_LEFF if USE_EKF else 'RAW camera ω (EKF off)'}")
     print(f"  Will give up if |θ|>{GIVEUP_ANGLE_DEG}° or |cart|>{MAX_PULSES} pulses.")
 
     # State estimates
@@ -98,6 +113,15 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     cart_vel_m_s     = 0.0
     last_cart_t      = time.time()
     cart_poll_count  = 0
+
+    # --- EKF angle/rate estimator (replaces raw camera ω) ------------
+    ekf        = PendulumEKF(grav_coef=GRAV_OVER_LEFF,
+                             sigma_a=EKF_SIGMA_A,
+                             sigma_theta=EKF_SIGMA_THETA,
+                             b=EKF_INPUT_GAIN)
+    ekf_ready  = False     # lazily reset() to the first valid frame
+    last_pwm   = 0         # last PWM sent — fed to EKF predict as input u
+    last_ekf_t = time.time()
 
     t_next     = time.time() + DT
     last_print = 0.0
@@ -139,18 +163,43 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                 diag_gp_n   = 0
 
             # ---- pull latest vision --------------------------------
-            result = cam.latest_angle()
-            if result is None:
+            result     = cam.latest_angle()
+            now_loop   = time.time()
+            dt_ekf     = now_loop - last_ekf_t
+            last_ekf_t = now_loop
+
+            if result is not None:
+                diag_frames += 1
+                theta_meas, omega_meas, _pole_up = result
+            else:
                 diag_none += 1
-                continue
-            diag_frames += 1
-            theta_rad, omega, _pole_up = result
+                theta_meas, omega_meas = None, None
+                if not USE_EKF:
+                    continue            # legacy: skip the whole cycle on a dropout
+
+            # ---- state estimate: EKF (clean ω) or raw camera --------
+            if USE_EKF:
+                if not ekf_ready:
+                    if theta_meas is None:
+                        continue        # wait for the first real frame to seed
+                    ekf.reset(theta_meas, omega_meas)
+                    ekf_ready = True
+                else:
+                    ekf.predict(dt_ekf, u=last_pwm)      # roll model fwd by real dt
+                    if theta_meas is not None:
+                        ekf.update(theta_meas)           # fuse camera (gating drops bad frames)
+                theta_rad, omega = ekf.state()
+            else:
+                theta_rad, omega = theta_meas, omega_meas
             theta_deg = math.degrees(theta_rad)
 
-            # ---- safety: pendulum fell -----------------------------
-            if abs(theta_deg) > GIVEUP_ANGLE_DEG:
+            # ---- safety: pendulum fell (prefer MEASURED θ; never trust
+            #      the estimate to hide a real fall) -------------------
+            theta_safety = (math.degrees(theta_meas)
+                            if theta_meas is not None else theta_deg)
+            if abs(theta_safety) > GIVEUP_ANGLE_DEG:
                 comm.send_velocity(0)
-                print(f"\n  [LQR] FELL  θ={theta_deg:+.1f}°  ω={omega:+.2f} rad/s")
+                print(f"\n  [LQR] FELL  θ={theta_safety:+.1f}°  ω={omega:+.2f} rad/s")
                 return 'fall'
 
             # ---- cart pos + velocity (50 Hz) -----------------------
@@ -177,8 +226,13 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                     print(f"\n  [LQR] CART BOUNDARY pos={pos}")
                     return 'boundary'
 
-            # ---- delay compensation: predict theta/omega to "now" --
-            if PREDICT_ENABLE:
+            # ---- delay compensation: predict state to "now" --------
+            if USE_EKF and PREDICT_ENABLE:
+                # Roll the EKF state forward by the loop delay using the same
+                # nonlinear model (last PWM held as input). Same physics as the
+                # Taylor block below, but consistent with the filter & grav_coef.
+                theta_ctrl, omega_ctrl = ekf.forward(T_DELAY, u=last_pwm)
+            elif PREDICT_ENABLE:
                 theta_ctrl = (theta_rad + omega * T_DELAY
                               + 0.5 * GRAV_OVER_LEFF * theta_rad * T_DELAY**2)
                 omega_ctrl = omega + GRAV_OVER_LEFF * theta_rad * T_DELAY
@@ -194,6 +248,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
             pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, _deadband(PWM_SIGN * u_pwm))))
 
             comm.send_velocity(pwm)
+            last_pwm = pwm        # feed back as EKF input u next cycle
 
             # ---- log every cycle, print throttled -----------------
             t = time.time() - t0
