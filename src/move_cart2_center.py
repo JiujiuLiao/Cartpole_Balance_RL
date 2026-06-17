@@ -21,10 +21,10 @@ PORT = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
 
 # ── Adjust this value to move the cart ────────────
 # Positive = right,  Negative = left
-OFFSET_M      = -0.4145          # m  (e.g. -0.0625 = 6.25 cm left)
+OFFSET_M      = -0.39          # m  (e.g. -0.0625 = 6.25 cm left)
 OFFSET_PULSES = pulses_for_distance(OFFSET_M)
 
-DRIVE_PWM  = 255   # PWM for moving (must be above deadband ~26)
+DRIVE_PWM  = 155   # PWM for moving (must be above deadband ~26)
 TOLERANCE  = 10    # pulses — stop within this distance of target
 
 
