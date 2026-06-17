@@ -38,10 +38,10 @@ K_X_DOT      = -25.3450    # cart-velocity gain
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
 # way on the very first balance attempt.
-PWM_SIGN = +1
+PWM_SIGN = -1
 
 # Control loop
-CTRL_HZ            = 100
+CTRL_HZ            = 50
 DT                 = 1.0 / CTRL_HZ
 
 # Cart velocity estimate
