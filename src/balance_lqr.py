@@ -59,7 +59,10 @@ CART_VEL_LPF_ALPHA = 0.30     # EMA on raw (Δpos/Δt) — high = more responsiv
 # Level-2 observer would include it. Safety/giveup still uses MEASURED theta.
 PREDICT_ENABLE = True
 T_DELAY        = 0.043     # s, sensor->actuation latency (tune: glass->motion 43-57ms)
-GRAV_OVER_LEFF = 28.85      # g/l_eff = 9.81/0.34 (l_eff from measured inertia)
+GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, FFT 31.2 + 过零点 31.9)
+                            # 注意: 这不是 g/几何长(g/0.34=28.85, 那是点质量近似);
+                            # 你的摆有配重 → 真身 = m·g·d/I_pivot = ω₀² ≈ 31.5,
+                            # 等效 g/l_eff, l_eff≈0.31m. 旧值 28.85 偏低~9%, 已弃.
 
 
 def _deadband(pwm):
