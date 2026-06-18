@@ -30,14 +30,10 @@ from ekf import PendulumEKF
 # ----------------------------------------------------------------------
 # These are PLACEHOLDERS.  Run `python compute_lqr_K.py` on PC, then
 # copy the printed K values here.
-# 2026-06-17: recomputed via compute_lqr_K.py with BRYSON Q/R (ρ=100).
-# Old [-1752,-307,-3.16,-25.3] had K_x≈0 → cart uncontrolled → closed-loop
-# dominant pole only -0.14 (razor-thin margin) → fell in ~1s on hardware.
-# New: dominant pole -0.98 (×7 margin), stable with 43ms delay (Padé check).
-K_THETA      = -2333.6127   # theta gain
-K_THETA_DOT  =  -411.0806   # theta_dot gain
-K_X          =  -120.0000   # cart-position gain  (was -3.16 → now controls cart)
-K_X_DOT      =  -211.6504   # cart-velocity gain
+K_THETA      = -1752.4887    # theta gain
+K_THETA_DOT  = -306.8017    # theta_dot gain
+K_X          = -3.1623    # cart-position gain
+K_X_DOT      = -25.3450    # cart-velocity gain
 
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),

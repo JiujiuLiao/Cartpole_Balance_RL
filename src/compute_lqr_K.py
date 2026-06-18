@@ -62,26 +62,24 @@ I_pivot = (m_pivot * r_pivot**2
 I_cm = I_pivot - m_p * l_p**2
 
 # ======================================================================
-# LQR WEIGHTS  —  chosen by BRYSON'S RULE (2026-06-17), not guessed.
+# LQR WEIGHTS - tune these to shape behaviour
 # ======================================================================
-# Bryson's rule: weight = 1 / (max acceptable value)².  Each state/control is
-# normalized by "how far it may stray before we're unhappy", so the cost is
-# dimensionally consistent and physically meaningful.
+# Q diagonals = "how much do I care about each state being non-zero?"
+#   Bigger -> controller works harder to drive that state to zero.
+# R                = "how much do I penalize control effort?"
+#   Bigger -> smoother, weaker control. Smaller -> aggressive, noisy.
 #
-# 旧值 diag(100,10,10,50)/R=1 是拍脑袋的：Q_x=10 等于"不在乎小车在哪" →
-# K_x≈-3.16(几乎不控小车) → 闭环主导极点仅 -0.14(时间常数7s，稳定裕度薄如纸)
-# → 现实里噪声/摩擦一扰动就倒。新值把小车真正管起来，裕度→-0.93(好6.6倍)。
-#
-# max-acceptable values（依据见注释，可按手感微调）:
-TH_MAX   = 0.12   # rad (~7°)   倒过这个角基本救不回
-THD_MAX  = 1.0    # rad/s       平衡时角速度别超这个
-X_MAX    = 0.25   # m           小车最多偏中心15cm(旧控制曾漂到37cm撞墙)
-XD_MAX   = 0.20   # m/s         低于 PWM200≈0.23m/s 的速度上限
-U_MAX    = 180    # PWM         日常控制别顶到255，留余量
-RHO      = 100    # 温和程度总旋钮：↑更温和(增益小、少饱和)；↓更激进(裕度大)
-                  #   通过 43ms 延迟 Padé 稳定性检验：ρ=30~300 均稳；ρ=100 选定。
-Q = np.diag([1.0/TH_MAX**2, 1.0/THD_MAX**2, 1.0/X_MAX**2, 1.0/XD_MAX**2])
-R = np.array([[RHO / U_MAX**2]])
+# Varghese 2017 used diag(1, 1, 500, 250) and R=1 for a 2.4 kg cart.
+# For a lighter cart (your hardware), reduce x weights proportionally.
+Q = np.diag([
+    100.0,   # theta       (rad)     — MOST important, drive to upright
+    10.0,    # theta_dot   (rad/s) 
+    10.0,    # x_cart      (m)       — small drift OK
+    50.0,    # x_cart_dot  (m/s)     — HEAVY penalty: at v=0.30 m/s the
+                                    #   motor has 0 N left, so LQR must
+                                    #   keep cart well below v_max
+])
+R = np.array([[1.0]])    # scalar; bigger = gentler control
 
 
 # ======================================================================
@@ -154,27 +152,14 @@ def main():
           f"-({K[2]:+.3f})·x "
           f"-({K[3]:+.3f})·ẋ")
 
-    # Closed-loop stability check (ideal, no delay)
+    # Closed-loop stability check
     A_cl = A - B @ K.reshape(1, -1)
     eigs = np.linalg.eigvals(A_cl)
-    print(f"\n  Closed-loop eigenvalues (no delay):")
+    print(f"\n  Closed-loop eigenvalues:")
     for e in eigs:
         marker = "OK" if e.real < 0 else "UNSTABLE"
         print(f"    {e.real:+.4f} {e.imag:+.4f}j   [{marker}]")
     print(f"\n  Closed-loop stable: {(eigs.real < 0).all()}")
-    print(f"  Dominant pole (max Re): {eigs.real.max():+.3f}  "
-          f"(更负=裕度更大；-0.14≈薄如纸, <-0.7 较稳)")
-
-    # Delay-robustness check: does it survive the real 43ms glass→motion delay?
-    # 1st-order Padé of e^{-sT} as an input delay, augmented closed loop.
-    T_DELAY = 0.043
-    a = 2.0 / T_DELAY
-    BK = B @ K.reshape(1, -1)
-    Aug = np.vstack([np.hstack([A + BK, 2 * a * B]),
-                     np.hstack([-K.reshape(1, -1), [[-a]]])])
-    dmax = np.linalg.eigvals(Aug).real.max()
-    print(f"  With {T_DELAY*1000:.0f}ms delay (Padé): max Re = {dmax:+.3f}  "
-          f"[{'OK 延迟下仍稳' if dmax < 0 else 'UNSTABLE 延迟下发散'}]")
 
     # Print copy-paste block for balance_lqr.py
     print()
