@@ -12,9 +12,15 @@ estimators on the same theta and measure how far each is from the reference and
 how much it LAGS:
 
   reference   Savitzky-Golay derivative            (truth, zero-lag)
-  current     1-frame diff + EMA(alpha)             (what V3 uses now)
-  lowpass     1-frame diff + 1-pole low-pass(fc)    (same family, retuned)
-  kalman      constant-acceleration KF [th,w,a]     (model-based)
+  EKF         PendulumEKF from ekf.py               (THE filter in use now)
+  lowpass     1-frame diff + 1-pole low-pass(fc)    (alt baseline)
+  kalman      constant-acceleration KF [th,w,a]     (alt baseline, generic model)
+
+Note: the EKF is re-run OFFLINE on the recorded theta with uniform dt and u=0
+(no PWM input, no dropouts/gating). So this grades the EKF *algorithm* on this
+data, apples-to-apples with the other estimators — not an exact replay of the
+real-time run. Pass --grav-coef/--ekf-sigma-a/--ekf-sigma-theta to match the
+values you calibrated in balance_lqr.py.
 
 Metrics vs reference:  lag (ms, via cross-correlation), RMS error, jitter.
 
@@ -38,6 +44,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
+# ekf.py lives in the parent src/ dir — make it importable from this subfolder.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 # ── load ──────────────────────────────────────────────────────────
 def load(fn):
@@ -55,13 +64,23 @@ def load(fn):
 
 
 # ── real-time estimators ──────────────────────────────────────────
-def ema_omega(theta, dt, alpha):
-    """1-frame backward diff + EMA low-pass (the current V3 method)."""
+def ekf_omega(theta, dt, grav_coef, sigma_a, sigma_theta):
+    """Run the ACTUAL PendulumEKF (ekf.py) — the filter in use — on the theta
+    series and return its omega estimate.
+
+    Measurement-only (u=0): this offline tool has no synchronized PWM, and the
+    omega lag/jitter is governed by the noise params, not the input term. Feed
+    theta in the EKF's convention (0 = upright); wrap is handled internally."""
+    from ekf import PendulumEKF
+    ekf = PendulumEKF(grav_coef=grav_coef, sigma_a=sigma_a,
+                      sigma_theta=sigma_theta, b=0.0)
+    ekf.reset(theta0=theta[0], omega0=0.0)
     out = np.zeros_like(theta)
     for k in range(1, len(theta)):
-        raw = (theta[k] - theta[k - 1]) / dt
-        out[k] = alpha * raw + (1 - alpha) * out[k - 1]
-    return out
+        ekf.step(theta[k], dt=dt, u=0.0)
+        out[k] = ekf.x[1]
+    rej_frac = ekf.n_rejected / max(1, len(theta) - 1)
+    return out, rej_frac
 
 
 def lowpass_omega(theta, dt, fc):
@@ -143,7 +162,12 @@ def main():
     ap.add_argument("csv")
     ap.add_argument("--t0", type=float, default=None, help="window start (s)")
     ap.add_argument("--t1", type=float, default=None, help="window end (s)")
-    ap.add_argument("--ema-alpha", type=float, default=0.35)
+    ap.add_argument("--grav-coef", type=float, default=31.5,
+                    help="EKF gravity coef ω₀² (match balance_lqr GRAV_OVER_LEFF)")
+    ap.add_argument("--ekf-sigma-a", type=float, default=8.0,
+                    help="EKF process-noise σ_a rad/s² (match balance_lqr)")
+    ap.add_argument("--ekf-sigma-theta", type=float, default=0.02,
+                    help="EKF meas-noise σ_θ rad (match your measured value)")
     ap.add_argument("--lp-fc", type=float, default=10.0, help="low-pass cutoff Hz")
     ap.add_argument("--kf-R", type=float, default=None, help="meas var rad^2 (auto if unset)")
     ap.add_argument("--kf-q", type=float, default=60.0, help="KF jerk noise std rad/s^3")
@@ -164,7 +188,7 @@ def main():
 
     win = args.savgol_win | 1                       # force odd
     ref = savgol_filter(thu, win, 3, deriv=1, delta=dt)     # truth (zero-lag)
-    cur = ema_omega(thu, dt, args.ema_alpha)
+    ekfo, ekf_rej = ekf_omega(thu, dt, args.grav_coef, args.ekf_sigma_a, args.ekf_sigma_theta)
     low = lowpass_omega(thu, dt, args.lp_fc)
     R = args.kf_R if args.kf_R is not None else (np.radians(0.5)) ** 2
     kal = kalman_omega(thu, dt, R, args.kf_q)
@@ -185,14 +209,21 @@ def main():
     print("=" * 66)
     print(f"  {'method':<14}{'RMS err':>10}{'lag(ms)':>10}{'jitter':>10}   (vs reference)")
     print(f"  {'-'*52}")
-    rows = [("current EMA", cur), (f"lowpass {args.lp_fc:.0f}Hz", low),
-            ("kalman", kal)]
+    rows = [("EKF (in use)", ekfo), (f"lowpass {args.lp_fc:.0f}Hz", low),
+            ("kalman (generic)", kal)]
     for name, est in rows:
         rms, lms, jit = metrics(est[s:e], ref[s:e], dt, trim)
         print(f"  {name:<14}{rms:>10.3f}{lms:>10.1f}{jit:>10.3f}")
     print(f"  {'-'*52}")
     print("  RMS err & jitter in rad/s; lag>0 means it lags the reference.")
     print("  Lower lag AND lower jitter = better. Reference is the zero-lag truth.")
+    if ekf_rej > 0.05:
+        print(f"  ⚠ EKF gating REJECTED {ekf_rej*100:.0f}% of frames → wrong regime "
+              f"(violent swing-up?). Judge the EKF on BALANCE data (near upright),")
+        print(f"    or window a calm segment with --t0/--t1. High rejection = the")
+        print(f"    EKF ran open-loop here, so its RMS/jitter above are NOT its fault.")
+    else:
+        print(f"  EKF gating rejected {ekf_rej*100:.0f}% of frames (low = healthy regime).")
     print("=" * 66)
 
     # plot
@@ -202,9 +233,9 @@ def main():
             ((tu[s], tu[e-1], "full window"),
              (tu[s], min(tu[e-1], tu[s] + 4.0), "zoom (first 4 s of window)"))):
         ax.plot(tu, ref, "k", lw=2.2, label="reference (SavGol, zero-lag)")
-        ax.plot(tu, cur, lw=1.0, label=f"current EMA (a={args.ema_alpha})")
+        ax.plot(tu, ekfo, lw=1.4, label="EKF (in use)")
         ax.plot(tu, low, lw=1.0, label=f"lowpass {args.lp_fc:.0f}Hz")
-        ax.plot(tu, kal, lw=1.0, label="kalman")
+        ax.plot(tu, kal, lw=1.0, label="kalman (generic)")
         ax.set_xlim(lo, hi)
         ax.set_xlabel("time (s)"); ax.set_ylabel("omega (rad/s)")
         ax.set_title(ttl); ax.grid(True, alpha=0.3)
