@@ -25,15 +25,28 @@ from config import (
 )
 from ekf import PendulumEKF
 
+# SensorTimestamp (parts[8]) is on CLOCK_BOOTTIME; "now" must be read on the SAME
+# clock for the age to be valid. CLOCK_BOOTTIME is Linux-only (the Pi); guard so
+# the module still imports on a dev box (Windows/macOS).
+try:
+    _CLOCK_BOOTTIME = time.CLOCK_BOOTTIME
+except AttributeError:
+    _CLOCK_BOOTTIME = None
+
 # ----------------------------------------------------------------------
 # LQR GAINS  ←  paste from compute_lqr_K.py output
 # ----------------------------------------------------------------------
 # These are PLACEHOLDERS.  Run `python compute_lqr_K.py` on PC, then
 # copy the printed K values here.
-K_THETA      = -1752.4887    # theta gain
-K_THETA_DOT  = -306.8017    # theta_dot gain
-K_X          = -3.1623    # cart-position gain
-K_X_DOT      = -25.3450    # cart-velocity gain
+# LQR state-feedback gains  →  state = [theta, theta_dot, x_cart, x_cart_dot]
+# Control law: pwm = -(K_THETA*theta + K_THETA_DOT*theta_dot
+#                      + K_X*x + K_X_DOT*x_dot)   (see ~line 294)
+# Computed by compute_lqr_K.py (Riccati solution), NOT hand-tuned.
+# Larger magnitude = that state is weighted more heavily / corrected harder.
+K_THETA      = -1752.4887   # pole angle theta [rad] — largest; primary balancer
+K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
+K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
+K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
 
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
@@ -51,15 +64,33 @@ CART_VEL_LPF_ALPHA = 0.30     # EMA on raw (Δpos/Δt) — high = more responsiv
                               # low = smoother (and more lag)
 
 # ── Delay compensation (Tier-2 angle predictor) ──────────────────────
-# Vision theta/omega arrive ~T_DELAY seconds late (glass->motion latency).
-# Extrapolate them forward to "now" before feeding the LQR, using the
-# pendulum's free near-upright dynamics: theta_ddot ≈ (g/l_eff)*theta.
-#   theta_pred = theta + omega*T + 0.5*(g/l_eff)*theta*T^2
-#   omega_pred = omega +          (g/l_eff)*theta*T
-# Note: this ignores the cart's own motion during the delay (2nd-order); a
-# Level-2 observer would include it. Safety/giveup still uses MEASURED theta.
+# Vision arrives late (glass->motion). We extrapolate the state forward by the
+# delay before feeding the LQR. The delay is NOT a constant (measured 38-58ms),
+# so it is computed PER FRAME from the camera's hardware capture timestamp:
+#
+#   T_delay_dyn = frame_age + T_ACTUATION
+#     frame_age   = now_BOOTTIME - SensorTimestamp   (MEASURED each loop via
+#                   parts[8] on CLOCK_BOOTTIME). This is glass->now: it INCLUDES
+#                   the ~20ms photon-capture latency + processing + ZMQ transport
+#                   + control-loop staleness, and all their jitter.
+#     T_ACTUATION = FIXED part STILL in the future when we predict: controller
+#                   compute + serial + motor mechanical response AFTER the command
+#                   (~17ms). Not in frame_age because it hasn't happened yet.
+#
+# CALIBRATE T_ACTUATION: run balance, watch the printed "age=..ms Tdly=..ms".
+# `age` should sit near your measured glass->now (~25-35ms, incl. the 20ms
+# capture); set T_ACTUATION (~motor response) so Tdly ~ glass->motion median (~40ms).
+#
+# GRACEFUL FALLBACK: if the camera sends no SensorTimestamp (parts[8]=0 / old
+# publisher) or the OS lacks CLOCK_BOOTTIME, frame_age stays 0 and the horizon is
+# just T_ACTUATION (a one-time warning prints) — bump T_ACTUATION in that case.
+#
+# The predictor uses the pendulum's free near-upright dynamics: θ̈ ≈ (g/l_eff)·θ.
+# Safety/giveup still uses MEASURED theta, never the prediction.
 PREDICT_ENABLE = True
-T_DELAY        = 0.043     # s, sensor->actuation latency (tune: glass->motion 43-57ms)
+T_ACTUATION    = 0.017     # s, post-command serial+motor response (CALIBRATE on hw)
+T_DELAY_MIN    = 0.015     # s, clamp floor — never predict less than this
+T_DELAY_MAX    = 0.090     # s, clamp ceiling — reject a stale/garbage timestamp
 GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, FFT 31.2 + 过零点 31.9)
                             # 注意: 这不是 g/几何长(g/0.34=28.85, 那是点质量近似);
                             # 你的摆有配重 → 真身 = m·g·d/I_pivot = ω₀² ≈ 31.5,
@@ -122,6 +153,10 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     ekf_ready  = False     # lazily reset() to the first valid frame
     last_pwm   = 0         # last PWM sent — fed to EKF predict as input u
     last_ekf_t = time.time()
+    last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
+    frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
+    t_delay_dyn = T_ACTUATION  # per-loop horizon; updated once a frame arrives
+    warned_no_ts = False       # one-time warning if SensorTimestamp is absent
 
     t_next     = time.time() + DT
     last_print = 0.0
@@ -163,16 +198,23 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                 diag_gp_n   = 0
 
             # ---- pull latest vision --------------------------------
-            result     = cam.latest_angle()
+            result     = cam.latest_angle_ts()
             now_loop   = time.time()
             dt_ekf     = now_loop - last_ekf_t
             last_ekf_t = now_loop
 
             if result is not None:
                 diag_frames += 1
-                theta_meas, omega_meas, _pole_up = result
+                theta_meas, omega_meas, _pole_up, sensor_ts_ns = result
                 theta_meas = -theta_meas
                 omega_meas = -omega_meas
+                if sensor_ts_ns is not None:
+                    last_sensor_ts_ns = sensor_ts_ns      # freshest capture time (BOOTTIME)
+                elif not warned_no_ts:
+                    print("  [LQR] WARN: camera sent no SensorTimestamp — dynamic "
+                          "delay degraded to T_ACTUATION only. Update V3 camera or "
+                          "raise T_ACTUATION.")
+                    warned_no_ts = True
             else:
                 diag_none += 1
                 theta_meas, omega_meas = None, None
@@ -228,16 +270,27 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                     print(f"\n  [LQR] CART BOUNDARY pos={pos}")
                     return 'boundary'
 
-            # ---- delay compensation: predict state to "now" --------
+            # ---- dynamic delay: how far ahead to predict THIS cycle ----
+            # frame_age = glass->now from the camera's hardware capture timestamp,
+            # read on the SAME clock (CLOCK_BOOTTIME). It naturally GROWS on
+            # dropouts (last_sensor_ts_ns stays put), so we predict further when
+            # vision goes stale. Falls back to 0 if no timestamp / no BOOTTIME.
+            if last_sensor_ts_ns is not None and _CLOCK_BOOTTIME is not None:
+                now_bt    = time.clock_gettime_ns(_CLOCK_BOOTTIME)
+                frame_age = (now_bt - last_sensor_ts_ns) / 1e9
+            t_delay_dyn = frame_age + T_ACTUATION
+            t_delay_dyn = max(T_DELAY_MIN, min(T_DELAY_MAX, t_delay_dyn))
+
+            # ---- delay compensation: predict state to "command effect" ----
             if USE_EKF and PREDICT_ENABLE:
-                # Roll the EKF state forward by the loop delay using the same
+                # Roll the EKF state forward by the (dynamic) delay using the same
                 # nonlinear model (last PWM held as input). Same physics as the
                 # Taylor block below, but consistent with the filter & grav_coef.
-                theta_ctrl, omega_ctrl = ekf.forward(T_DELAY, u=last_pwm)
+                theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=last_pwm)
             elif PREDICT_ENABLE:
-                theta_ctrl = (theta_rad + omega * T_DELAY
-                              + 0.5 * GRAV_OVER_LEFF * theta_rad * T_DELAY**2)
-                omega_ctrl = omega + GRAV_OVER_LEFF * theta_rad * T_DELAY
+                theta_ctrl = (theta_rad + omega * t_delay_dyn
+                              + 0.5 * GRAV_OVER_LEFF * theta_rad * t_delay_dyn**2)
+                omega_ctrl = omega + GRAV_OVER_LEFF * theta_rad * t_delay_dyn
             else:
                 theta_ctrl = theta_rad
                 omega_ctrl = omega
@@ -260,7 +313,8 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                                   f"{cart_vel_m_s:.4f}", pwm, pos])
             if t - last_print > 0.2:
                 print(f"  {t:5.2f}  [LQR] θ={theta_deg:+6.1f}  ω={omega:+6.2f}  "
-                      f"ẋ={cart_vel_m_s:+5.2f}  pwm={pwm:+5}  pos={pos:+5}")
+                      f"ẋ={cart_vel_m_s:+5.2f}  pwm={pwm:+5}  pos={pos:+5}  "
+                      f"age={frame_age*1000:4.0f}ms Tdly={t_delay_dyn*1000:4.0f}ms")
                 last_print = t
 
     except KeyboardInterrupt:
