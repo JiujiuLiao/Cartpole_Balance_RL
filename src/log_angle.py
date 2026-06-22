@@ -25,6 +25,8 @@ import csv
 import time
 import sys
 import os
+import math
+import statistics
 import threading
 
 from camera_comm import CameraSubscriber
@@ -114,5 +116,19 @@ cam.close()
 
 print(f"\n  Saved {len(rows)} samples → {filepath}")
 print(f"  Duration: {float(rows[-1][0]):.1f} s")
+
+# ── sigma_theta for the EKF (only meaningful if the pole was STATIC) ──
+# Measurement noise = how much θ scatters when the true angle is constant.
+# Hold the pole still, run this, then paste the rad value into balance_lqr.py
+# (EKF_SIGMA_THETA). The CSV logs degrees; the EKF wants radians, so we
+# convert here (×π/180) so there is nothing left to compute by hand.
+thetas_deg = [float(r[1]) for r in rows]
+if len(thetas_deg) > 1:
+    sd_deg = statistics.pstdev(thetas_deg)
+    sd_rad = math.radians(sd_deg)
+    print()
+    print(f"  θ std = {sd_deg:.4f}°  =  {sd_rad:.5f} rad")
+    print(f"  -> EKF_SIGMA_THETA = {sd_rad:.5f}   (ONLY valid if pole was static)")
+
 print()
 print(f"  Analyze:  python analyze_swingup.py {filename}")
