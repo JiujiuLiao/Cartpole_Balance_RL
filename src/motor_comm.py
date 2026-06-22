@@ -29,6 +29,7 @@ Usage:
 """
 
 import time
+import threading
 import serial
 
 try:
@@ -71,6 +72,14 @@ class MotorComm:
         self.echo_timeout = echo_timeout
         self._auto_recenter = (AUTO_RECENTER_ON_CLOSE if auto_recenter_on_close is None
                                else auto_recenter_on_close)
+
+        # Background position-stream state (see start_position_stream).
+        # When the reader thread is running, get_position() returns this cache
+        # instantly instead of doing a blocking <p,0> round-trip.
+        self._cached_pos     = 0
+        self._reader_running = False
+        self._reader_thread  = None
+
         if verbose:
             print(f"  Connected: {port} @ {baud}")
 
@@ -78,7 +87,11 @@ class MotorComm:
     def send_velocity(self, pwm):
         """Fire-and-forget velocity command. No echo wait. Clamps to ±255."""
         pwm = max(self.PWM_MIN, min(self.PWM_MAX, int(pwm)))
-        self.ser.reset_input_buffer()
+        # Only flush input when NOT streaming. With the position stream running,
+        # the reader thread drains the buffer continuously, and flushing here
+        # would wipe incoming "P<pos>" lines (and the reader's data).
+        if not self._reader_running:
+            self.ser.reset_input_buffer()
         self.ser.write(f"<v,{pwm}>".encode())
 
     # ── reliable path ──────────────────────────────────────────
@@ -114,13 +127,20 @@ class MotorComm:
     # ── encoder query ──────────────────────────────────────────
     def get_position(self, echo_timeout=None, default=0):
         """
-        Query encoder position. Returns int (pulses), or `default` on failure.
+        Encoder position in pulses.
+
+        If the background position stream is running (start_position_stream),
+        returns the cached latest value INSTANTLY (no serial round-trip) — this
+        is the control-loop path. Otherwise falls back to a blocking <p,0>
+        query (original behavior, used by positioning/measurement scripts).
 
         Use a small echo_timeout (e.g. 0.04-0.08) inside fast control loops.
         Pass `default=None` when the caller must distinguish a read failure
         from a true zero position (e.g. positioning scripts where the wrong
         position would drive the motor in the wrong direction).
         """
+        if self._reader_running:
+            return self._cached_pos
         payload = self.send_and_read("p", 0, echo_timeout=echo_timeout)
         if not payload:
             return default
@@ -129,6 +149,57 @@ class MotorComm:
             return int(payload.split()[-1])
         except (ValueError, IndexError):
             return default
+
+    # ── background position stream (firmware auto-pushes "P<pos>") ──────
+    def start_position_stream(self):
+        """
+        Start a daemon thread that reads the ESP32's "P<pos>" push stream and
+        caches the latest position. After this, get_position() is non-blocking.
+
+        Call AFTER any blocking send()/home and after flashing the firmware
+        that pushes position (POS_PUSH_INTERVAL_MS). While the stream runs, do
+        NOT call the blocking send()/send_and_read()/<p,0> path — the reader
+        thread owns reading and they would race. No-op if already running.
+        """
+        if self._reader_running:
+            return
+        self.ser.reset_input_buffer()
+        self._reader_running = True
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
+    def stop_position_stream(self):
+        """Stop the background reader thread (joins it). No-op if not running."""
+        if not self._reader_running:
+            return
+        self._reader_running = False
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=0.3)
+            self._reader_thread = None
+
+    def _reader_loop(self):
+        """Continuously read the serial stream and cache the latest 'P<pos>'.
+        Command echoes ('<...>') and other lines are ignored."""
+        buf = b""
+        while self._reader_running:
+            try:
+                n = self.ser.in_waiting
+                chunk = self.ser.read(n if n else 1)   # blocks up to read timeout
+            except Exception:
+                break
+            if not chunk:
+                continue
+            buf += chunk
+            if len(buf) > 4096:           # guard against unbounded growth
+                buf = buf[-512:]
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.strip()
+                if line[:1] == b"P":
+                    try:
+                        self._cached_pos = int(line[1:])
+                    except ValueError:
+                        pass
 
     # ── lifecycle ──────────────────────────────────────────────
     def stop(self):
@@ -169,10 +240,13 @@ class MotorComm:
         time.sleep(0.3)
 
     def close(self):
+        # Recenter first while the stream is still live (get_position uses the
+        # cache, send_velocity works), then tear down the reader thread.
         if self._auto_recenter:
             self._recenter()
         self.stop()
         time.sleep(0.1)
+        self.stop_position_stream()
         self.ser.close()
 
     # context-manager support: `with MotorComm(...) as comm:`
