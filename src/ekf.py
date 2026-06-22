@@ -91,8 +91,9 @@ class PendulumEKF:
         """非线性一步推进 f(x,u)。"""
         th, om = x
         om_dot = self.w0sq * math.sin(th) + self.b * u * math.cos(th)
-        return np.array([th + om * dt,
-                         om + om_dot * dt])
+        om_new = om + om_dot * dt
+        return np.array([th + om_new * dt,
+                         om_new])
 
     def _F(self, x, dt, u):
         """f 对状态的雅可比（笔记区块4/7：F[1,0] 自带 cos(theta)）。"""
