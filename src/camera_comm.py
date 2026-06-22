@@ -80,6 +80,20 @@ class CameraSubscriber:
         msg = self.latest()
         return parse_angle(msg) if msg is not None else None
 
+    def latest_angle_ts(self):
+        """
+        Drain + parse the most recent message, INCLUDING the capture timestamp.
+        Returns (theta_rad, omega_rad_s, pole_up, sensor_ts_ns) or None.
+
+        sensor_ts_ns is parts[8] = SensorTimestamp (ns, CLOCK_BOOTTIME): the
+        photon-capture time stamped by libcamera. Compare it against
+        time.clock_gettime_ns(time.CLOCK_BOOTTIME) to get the true per-frame age
+        (including the ~20ms camera capture latency) for dynamic delay
+        compensation. None if the publisher does not send it.
+        """
+        msg = self.latest()
+        return parse_angle_ts(msg) if msg is not None else None
+
     def close(self):
         self.sock.close()
         self.ctx.destroy()
@@ -109,5 +123,31 @@ def parse_angle(msg):
         omega   = float(parts[5])
         pole_up = parts[6].strip() in ("1", "True", "true")
         return theta, omega, pole_up
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_angle_ts(msg):
+    """
+    Like parse_angle(), but also returns the hardware capture timestamp.
+    Returns (theta_rad, omega_rad_s, pole_up, sensor_ts_ns) or None.
+
+    sensor_ts_ns  parts[8]  SensorTimestamp in ns on CLOCK_BOOTTIME (photon-capture
+                            time stamped by libcamera). None if the field is absent
+                            or 0 (older publisher / metadata unavailable). Compare
+                            against time.clock_gettime_ns(time.CLOCK_BOOTTIME).
+    """
+    try:
+        parts = msg.split(",") if "," in msg else msg.split()
+        if len(parts) < 7:
+            return None
+        theta   = float(parts[4])
+        omega   = float(parts[5])
+        pole_up = parts[6].strip() in ("1", "True", "true")
+        sensor_ts_ns = None
+        if len(parts) > 8:
+            v = int(parts[8])
+            sensor_ts_ns = v if v > 0 else None      # 0 == "unavailable" sentinel
+        return theta, omega, pole_up, sensor_ts_ns
     except (ValueError, IndexError):
         return None
