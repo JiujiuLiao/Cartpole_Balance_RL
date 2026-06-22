@@ -14,7 +14,9 @@ Fixes vs v2:
 - Axis pivot persisted in axis_calib.json (press 'c' to recalibrate by mouse).
 - HSV tuner trackbars (press 'h'), values saved with 's'.
 - ZMQ legacy CSV string on port 9999 (compatible with camera_comm.py):
-  "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns"; sent ONLY on valid frames.
+  "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns,sensor_ts_ns"; sent ONLY on valid
+  frames. ts_ns = time.time_ns() at send (wall clock, legacy). sensor_ts_ns =
+  SensorTimestamp (ns, CLOCK_BOOTTIME) = photon-capture time, 0 if unavailable.
 
 Angle convention (matches the user's spec):
   theta = 0      -> pendulum tip (blue/green end) pointing UP
@@ -358,7 +360,15 @@ def main():
     try:
         while True:
             # picamera2 "RGB888" returns memory-order BGR -> already OpenCV-native.
-            frame = picam2.capture_array()
+            # Use capture_request() (not capture_array()) so we can read the
+            # hardware SensorTimestamp from frame metadata — the photon-capture
+            # time (ns, CLOCK_BOOTTIME). Published as parts[8] so the controller
+            # can compute true per-frame age INCLUDING the ~20ms capture latency.
+            # Release the request promptly to return the buffer to the pool.
+            req = picam2.capture_request()
+            ts_sensor = req.get_metadata().get("SensorTimestamp")  # ns, CLOCK_BOOTTIME
+            frame = req.make_array("main")
+            req.release()
             t_now = time.perf_counter()
             dt = t_now - t_prev
             t_prev = t_now
@@ -409,7 +419,10 @@ def main():
             #   parts[0..4] = theta_rad (newest at [4]); we repeat the same value
             #   parts[5]    = omega (rad/s)
             #   parts[6]    = pole_up (1 near upright, else 0)
-            #   parts[7]    = timestamp (ns)
+            #   parts[7]    = wall-clock send time, time.time_ns() (legacy)
+            #   parts[8]    = SensorTimestamp (ns, CLOCK_BOOTTIME) = photon-capture
+            #                 time; 0 if metadata unavailable. The controller uses
+            #                 this for dynamic delay (now_BOOTTIME - parts[8]).
             # Sending ONLY on valid frames means a sustained detection loss
             # produces no messages -> downstream ZMQ_TIMEOUT stops the motor.
             if valid:
@@ -418,7 +431,8 @@ def main():
                 sock.send_string(
                     f"{wrapped:.6f},{wrapped:.6f},{wrapped:.6f},"
                     f"{wrapped:.6f},{wrapped:.6f},{omega_filt:.6f},"
-                    f"{pole_up},{time.time_ns()}"
+                    f"{pole_up},{time.time_ns()},"
+                    f"{ts_sensor if ts_sensor is not None else 0}"
                 )
 
             # --- Display (throttled, GUI only) ---
