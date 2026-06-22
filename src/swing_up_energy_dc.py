@@ -162,6 +162,12 @@ def main():
     comm.send("h", 0, echo_timeout=0.3)
     time.sleep(0.1)
 
+    # Start the background position stream AFTER the home reset (home uses the
+    # blocking echo path). From here on get_position() is non-blocking (reads
+    # the cached value the ESP32 pushes), so the control loop never stalls on
+    # a <p,0> round-trip. Requires the firmware that auto-pushes "P<pos>".
+    comm.start_position_stream()
+
     print()
     input("  Pendulum hanging at center. Press ENTER to start swing-up...")
     cam.drain()   # clear buffer right before loop
