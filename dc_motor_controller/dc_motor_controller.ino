@@ -3,7 +3,14 @@
 //   <v,PWM>   set motor velocity, PWM = -255 to 255
 //   <h,0>     reset encoder position to 0
 //   <p,0>     return current encoder position
+//   <a,PWM>   acceleration burst test (ESP32-timed sampling, dumps CSV)
 // All commands are echoed back after execution.
+//
+// Position streaming (added 2026-06-23):
+//   The controller AUTO-PUSHES the encoder position as "P<pos>\n" at ~100 Hz,
+//   without being asked. The Pi reads this stream in a background thread and
+//   caches the latest value, so the control loop never blocks on a <p,0>
+//   round-trip. The <p,0> query path is kept for backward compatibility.
 
 const int RPWM = 16;
 const int LPWM = 17;
@@ -172,6 +179,22 @@ void setup() {
   Serial.println("PWM frequency: 20000 Hz (firmware build 2026-06-05)");
 }
 
+// Auto-push position so the Pi never has to block on a <p,0> round-trip.
+// "P<pos>\n" — distinct from command echoes (which start with '<'), so the
+// Pi's background reader can pick position lines out of the mixed stream.
+const unsigned long POS_PUSH_INTERVAL_MS = 8;   // ~125 Hz
+unsigned long lastPosPush = 0;
+
+void pushPosition() {
+  unsigned long nowMs = millis();
+  if (nowMs - lastPosPush >= POS_PUSH_INTERVAL_MS) {
+    lastPosPush = nowMs;
+    Serial.print('P');
+    Serial.print(encoderPos);   // 32-bit volatile long: read is atomic on ESP32
+    Serial.print('\n');
+  }
+}
+
 void loop() {
   recvWithStartEndMarkers();
   if (newData) {
@@ -191,4 +214,6 @@ void loop() {
     returnParsedData();
     newData = false;
   }
+
+  pushPosition();
 }
