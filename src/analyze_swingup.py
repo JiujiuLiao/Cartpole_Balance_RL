@@ -3,7 +3,7 @@ analyze_swingup.py
 ==================
 Visualize and analyze swing-up experiment data.
 Works with both:
-  - angle_*.csv   (from log_angle.py  — angle + omega only)
+  - angle_*.csv   (from measure_sigma_theta.py — angle + omega only)
   - swingup_*.csv (from swing_up_energy_dc.py — angle + omega + pwm + pos)
 
 Usage:
