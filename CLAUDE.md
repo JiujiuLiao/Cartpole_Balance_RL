@@ -46,7 +46,7 @@ cartpole-pid/
 │   ├── swing_up_dc.py               ← swing-up controller (active)
 │   ├── swing_up_energy_dc.py        ← energy-based swing-up (alt)
 │   ├── move_cart2_center.py         ← helper: return cart to center
-│   ├── log_angle.py                 ← angle recorder during experiments
+│   ├── measure_sigma_theta.py      ← static-pole recorder → prints EKF_SIGMA_THETA
 │   ├── analyze_*.py                 ← offline analysis scripts
 │   └── hardware_measurement/        ← calibration / standalone tests
 ├── dc_motor_controller/             ← ESP32 firmware (Arduino sketch)

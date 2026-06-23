@@ -1,24 +1,32 @@
 """
-log_angle.py
-============
-PURPOSE : Record pendulum angle during an active swing-up experiment.
-          Run this IN PARALLEL with swing_up_dc.py (two terminals on PC).
-RUN ON  : PC (connects to Raspberry Pi camera remotely via ZMQ)
-USE WHEN: Motor is running and you want to capture exact swing angles.
+measure_sigma_theta.py
+======================
+Standalone camera-angle recorder. Primary use = measure the EKF measurement
+noise sigma_theta.
 
-Usage (Terminal 2, while swing_up_dc.py runs in Terminal 1):
-    python log_angle.py
-    python log_angle.py tcp://192.168.0.109:9999
+HOW: hold the pole STILL (no motor needed), run this, record a few hundred
+frames, Ctrl+C. On exit it prints  EKF_SIGMA_THETA = <rad>  — paste that into
+balance_lqr.py (EKF_SIGMA_THETA).
+  ⚠️ The std is ONLY valid if the pole was static (true angle constant). If the
+     pole moved, the number includes real motion, not just camera noise.
 
-Steps:
-    1. Terminal 1: python swing_up_dc.py COM6
-    2. Terminal 2: python log_angle.py          ← start first, then ENTER
-    3. Ctrl+C both when done
+RUN ON : PC or Pi (connects to the camera ZMQ stream; no motor connection).
 
-Output: angle_YYYYMMDD_HHMMSS.csv  →  analyze with analyze_swingup.py
+Usage:
+    python measure_sigma_theta.py
+    python measure_sigma_theta.py tcp://192.168.0.109:9999
 
-See also: cartpole-pid/measure_pendulum.py  — records free oscillation only
-          (runs on Raspberry Pi, no motor)
+Also writes angle_YYYYMMDD_HHMMSS.csv (t, theta_deg, omega, pole_up) for inspection.
+
+NOTE: to log angles DURING a swing-up/balance run you do NOT need this script —
+swing_up_energy_dc.py already logs the full state (theta, omega, pwm, cart_pos)
+to swingup_*.csv itself. (This file used to be the swing-up companion logger;
+that role is now redundant, so it was slimmed down to the sigma_theta tool.)
+
+Wire format: reads parts[4]=theta, [5]=omega, [6]=pole_up. The V3 camera also
+sends parts[7]=send-ts and parts[8]=SensorTimestamp; this script ignores both.
+
+See also: cartpole-pid/measure_pendulum.py — records free oscillation (no motor).
 """
 
 import csv
@@ -27,7 +35,6 @@ import sys
 import os
 import math
 import statistics
-import threading
 
 from camera_comm import CameraSubscriber
 from config import DEFAULT_ZMQ_ADDR
@@ -38,7 +45,7 @@ ZMQ_ADDR = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ZMQ_ADDR
 cam = CameraSubscriber(ZMQ_ADDR, recv_timeout_ms=2000)
 
 print("=" * 50)
-print("  Angle Logger")
+print("  sigma_theta measurement  (hold the pole STILL)")
 print("=" * 50)
 print(f"  ZMQ: {ZMQ_ADDR}")
 print()
@@ -52,23 +59,12 @@ filepath = os.path.join(os.path.dirname(__file__), filename)
 cam.drain()
 
 print(f"  Recording → {filename}")
-print("  Press ENTER to mark 'motor stopped'. Ctrl+C to stop.\n")
+print("  Hold the pole still. Ctrl+C to stop.\n")
 print(f"  {'t(s)':>6}  {'θ(°)':>8}  {'ω(r/s)':>8}  pole_up")
 print(f"  {'-'*40}")
 
 rows = []
 t0 = time.time()
-motor_stop_t = None
-
-def wait_for_marker():
-    global motor_stop_t
-    while True:
-        input()
-        motor_stop_t = time.time() - t0
-        print(f"\n  *** Motor stop marked at t={motor_stop_t:.2f}s ***\n")
-
-marker_thread = threading.Thread(target=wait_for_marker, daemon=True)
-marker_thread.start()
 
 try:
     while True:
@@ -77,16 +73,15 @@ try:
             print("  WARNING: no camera data")
             continue
 
-        # Support both comma-separated and space-separated formats
+        # Support both comma- and space-separated formats
         parts = msg.split(",") if "," in msg else msg.split()
-        if len(parts) < 8:
+        if len(parts) < 7:
             continue
 
         try:
             theta_rad = float(parts[4])
             omega     = float(parts[5])
             pole_up   = parts[6].strip() in ("1", "True", "true")
-            ts        = float(parts[7])
         except (ValueError, IndexError):
             continue
 
@@ -106,22 +101,19 @@ except KeyboardInterrupt:
 # Save CSV
 with open(filepath, "w", newline="") as f:
     writer = csv.writer(f)
-    writer.writerow(["t_s", "theta_deg", "omega_rad_s", "pole_up",
-                     "motor_stop_t"])
-    for i, row in enumerate(rows):
-        row.append(f"{motor_stop_t:.4f}" if (i == 0 and motor_stop_t) else "")
+    writer.writerow(["t_s", "theta_deg", "omega_rad_s", "pole_up"])
     writer.writerows(rows)
 
 cam.close()
 
 print(f"\n  Saved {len(rows)} samples → {filepath}")
-print(f"  Duration: {float(rows[-1][0]):.1f} s")
+if rows:
+    print(f"  Duration: {float(rows[-1][0]):.1f} s")
 
 # ── sigma_theta for the EKF (only meaningful if the pole was STATIC) ──
 # Measurement noise = how much θ scatters when the true angle is constant.
-# Hold the pole still, run this, then paste the rad value into balance_lqr.py
-# (EKF_SIGMA_THETA). The CSV logs degrees; the EKF wants radians, so we
-# convert here (×π/180) so there is nothing left to compute by hand.
+# The CSV logs degrees; the EKF wants radians, so we convert here (×π/180)
+# so there is nothing left to compute by hand.
 thetas_deg = [float(r[1]) for r in rows]
 if len(thetas_deg) > 1:
     sd_deg = statistics.pstdev(thetas_deg)
@@ -129,6 +121,3 @@ if len(thetas_deg) > 1:
     print()
     print(f"  θ std = {sd_deg:.4f}°  =  {sd_rad:.5f} rad")
     print(f"  -> EKF_SIGMA_THETA = {sd_rad:.5f}   (ONLY valid if pole was static)")
-
-print()
-print(f"  Analyze:  python analyze_swingup.py {filename}")
