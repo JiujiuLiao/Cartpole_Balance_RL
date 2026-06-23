@@ -2,17 +2,19 @@
 Shared ZMQ subscriber for the camera angle stream.
 
 Replaces the duplicated context/socket boilerplate in:
-  balance_pid.py, swing_up_energy_dc.py, log_angle.py,
+  balance_pid.py, swing_up_energy_dc.py, measure_sigma_theta.py,
   hardware_measurement/{acquire_pendulum_dynamics.py, pc_end_to_end_latency.py}.
 
-The publisher is camerapreview_detect_color2.py on the Raspberry Pi.
+The publisher is camerapreview_detect_color_V3.py on the Raspberry Pi.
 
 Wire format (CSV string from the Pi):
   parts[0..4]  five most recent angles (rad); parts[4] is the newest
   parts[5]     average angular velocity (rad/s)
   parts[6]     pole_up flag, "1"/"0" or "True"/"False"
-  parts[7]     Pi loop start timestamp     (added 2026-04 for latency tests)
-  parts[8]     Pi angle-computed timestamp (added 2026-04 for latency tests)
+  parts[7]     send time, time.time_ns() wall clock (legacy; old latency tests)
+  parts[8]     SensorTimestamp (ns, CLOCK_BOOTTIME) = photon-capture time, 0 if
+               unavailable. Read via parse_angle_ts() / latest_angle_ts() and
+               compare against time.clock_gettime_ns(time.CLOCK_BOOTTIME).
 """
 
 import zmq
