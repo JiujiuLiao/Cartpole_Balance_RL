@@ -55,8 +55,8 @@ def distance_for_pulses(pulses: int) -> float:
 
 
 # Derived AFTER helpers are defined.
-MAX_PULSES = pulses_for_distance(USABLE_HALF_M)
-# MAX_PULSES ≈ 3238 (USABLE_HALF_M=0.37 m at M_PER_PULSE=0.1143 mm).
+#MAX_PULSES = pulses_for_distance(USABLE_HALF_M)
+MAX_PULSES = 2624 #3238 (USABLE_HALF_M=0.37 m at M_PER_PULSE=0.1143 mm).
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -72,7 +72,7 @@ PWM_DEADBAND     = 30           # measured 2026-05-27: below |PWM|=22 cart
                                 # does not move. Asymmetric (fwd ≈ 103 pps,
                                 # rev ≈ 70 pps at PWM=22).
 
-GIVEUP_ANGLE_DEG = 25.0         # ANY controller must abort balance/swing if
+GIVEUP_ANGLE_DEG = 10.0         # ANY controller must abort balance/swing if
                                 # |θ| exceeds this — pole has fallen too far.
 
 
