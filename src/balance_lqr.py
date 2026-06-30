@@ -59,9 +59,10 @@ CTRL_HZ            = 100
 DT                 = 1.0 / CTRL_HZ
 
 # Cart velocity estimate
-CART_POLL_EVERY_N  = 2        # 50 Hz cart polling at 100 Hz loop
-CART_VEL_LPF_ALPHA = 0.30     # EMA on raw (Δpos/Δt) — high = more responsive,
-                              # low = smoother (and more lag)
+# 2026-06: position is now pushed ~10ms (firmware) and read from cache (instant),
+# so poll EVERY loop and use RAW Δpos/Δt (no EMA — encoder is clean & fast; the
+# old EMA only added lag). If ẋ looks jittery in the logs, add a light α-β here.
+CART_POLL_EVERY_N  = 1        # read cached position every 100 Hz loop
 
 # ── Delay compensation (Tier-2 angle predictor) ──────────────────────
 # Vision arrives late (glass->motion). We extrapolate the state forward by the
@@ -144,6 +145,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     cart_vel_m_s     = 0.0
     last_cart_t      = time.time()
     cart_poll_count  = 0
+    last_pos_raw     = pos        # last DISTINCT pulse count (for Δpos==0 guard)
 
     # --- EKF angle/rate estimator (replaces raw camera ω) ------------
     ekf        = PendulumEKF(grav_coef=GRAV_OVER_LEFF,
@@ -256,13 +258,20 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                 diag_gp_n      += 1
                 cart_pos_m      = pos * M_PER_PULSE
 
-                t_cart = time.time()
-                dt_c   = max(t_cart - last_cart_t, 1e-6)
-                v_inst = (cart_pos_m - cart_pos_m_prev) / dt_c
-                cart_vel_m_s    = (CART_VEL_LPF_ALPHA * v_inst
-                                   + (1.0 - CART_VEL_LPF_ALPHA) * cart_vel_m_s)
-                cart_pos_m_prev = cart_pos_m
-                last_cart_t     = t_cart
+                # Raw velocity = Δpos / Δt (no smoothing). Δt is the REAL time
+                # between distinct updates (handles loop/push jitter).
+                # Δpos==0 guard: if the pushed cache hasn't refreshed since the
+                # last distinct value (firmware-push vs loop beat), the cart did
+                # NOT necessarily stop — hold the previous velocity instead of
+                # emitting a fake 0 that would spike K_x_dot.
+                if pos != last_pos_raw:
+                    t_cart = time.time()
+                    dt_c   = max(t_cart - last_cart_t, 1e-6)
+                    cart_vel_m_s    = (cart_pos_m - cart_pos_m_prev) / dt_c
+                    cart_pos_m_prev = cart_pos_m
+                    last_cart_t     = t_cart
+                    last_pos_raw    = pos
+                # else: cache unchanged this read → keep previous cart_vel_m_s
 
                 # ---- safety: cart boundary -------------------------
                 if abs(pos) > MAX_PULSES:

@@ -182,7 +182,7 @@ void setup() {
 // Auto-push position so the Pi never has to block on a <p,0> round-trip.
 // "P<pos>\n" — distinct from command echoes (which start with '<'), so the
 // Pi's background reader can pick position lines out of the mixed stream.
-const unsigned long POS_PUSH_INTERVAL_MS = 8;   // ~125 Hz
+const unsigned long POS_PUSH_INTERVAL_MS = 10;   // ~100 Hz
 unsigned long lastPosPush = 0;
 
 void pushPosition() {
