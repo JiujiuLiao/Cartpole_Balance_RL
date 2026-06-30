@@ -48,7 +48,7 @@ ZMQ_ADDR = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
 RUN_S        = 25.0                  # total recording time
 STEP_S       = 0.40                  # hold each PWM step this long (transient = signal)
 PWM_MAGS     = [120, 160, 200]       # cycle through these magnitudes (> deadband)
-POS_LIMIT    = int(MAX_PULSES * 0.55)  # ~1780 pulses: stay well inside the track
+POS_LIMIT    = int(MAX_PULSES * 0.30)  # ~1780 pulses: stay well inside the track
 assert PWM_MAGS[0] > PWM_DEADBAND, "PWM steps must exceed the dead-band"
 
 
