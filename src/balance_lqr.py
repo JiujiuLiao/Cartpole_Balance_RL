@@ -17,7 +17,9 @@ Control law (K precomputed by compute_lqr_K.py):
 K is in PWM units because compute_lqr_K.py uses FORCE_PER_PWM in B.
 """
 
+import csv
 import math
+import os
 import time
 
 from config import (
@@ -160,6 +162,28 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     t_delay_dyn = T_ACTUATION  # per-loop horizon; updated once a frame arrives
     warned_no_ts = False       # one-time warning if SensorTimestamp is absent
 
+    # --- diagnostic CSV (balance-only; separate from swing-up's log_writer) ---
+    # ONE ROW PER LOOP with the full control chain so we can tell delay from
+    # parameter from hardware offline:
+    #   raw camera meas  ->  EKF state  ->  predicted (LQR-input) state  ->
+    #   pre-clamp force  ->  post-clamp PWM,  plus timing + gating + covariance.
+    # Analyze with hardware_measurement/analyze_balance_diag.py.
+    _diag_name = time.strftime("balance_diag_%Y%m%d_%H%M%S.csv")
+    _diag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _diag_name)
+    _diag_f    = open(_diag_path, "w", newline="")
+    _diag_w    = csv.writer(_diag_f)
+    _diag_w.writerow([
+        "loop_t_mono", "t", "sensor_ts_ns", "frame_age", "t_delay_dyn", "dt_ekf",
+        "theta_meas_deg", "omega_meas", "theta_ekf_deg", "omega_ekf",
+        "gated", "n_rejected", "theta_ctrl_deg", "omega_ctrl",
+        "P_theta", "P_omega", "u_pwm", "pwm", "saturated", "in_deadband",
+        "cart_pos_m", "cart_vel_m_s",
+    ])
+    _diag_rows = 0
+    def _fmt(v, nd=4):        # format an optional float; blank for None/dropout
+        return "" if v is None else f"{v:.{nd}f}"
+    print(f"  [LQR] diag log -> {_diag_path}")
+
     t_next     = time.time() + DT
     last_print = 0.0
 
@@ -224,6 +248,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                     continue            # legacy: skip the whole cycle on a dropout
 
             # ---- state estimate: EKF (clean ω) or raw camera --------
+            gated = False        # True if this frame was rejected by the EKF gate
             if USE_EKF:
                 if not ekf_ready:
                     if theta_meas is None:
@@ -233,7 +258,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
                 else:
                     ekf.predict(dt_ekf, u=last_pwm)      # roll model fwd by real dt
                     if theta_meas is not None:
-                        ekf.update(theta_meas)           # fuse camera (gating drops bad frames)
+                        gated = not ekf.update(theta_meas)  # fuse; True→frame rejected by gate
                 theta_rad, omega = ekf.state()
             else:
                 theta_rad, omega = theta_meas, omega_meas
@@ -316,6 +341,34 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
 
             # ---- log every cycle, print throttled -----------------
             t = time.time() - t0
+
+            # ---- diagnostic row: full control chain (balance-only) --------
+            _diag_w.writerow([
+                f"{now_loop:.6f}",
+                f"{t:.4f}",
+                "" if last_sensor_ts_ns is None else str(last_sensor_ts_ns),
+                f"{frame_age:.6f}",
+                f"{t_delay_dyn:.6f}",
+                f"{dt_ekf:.6f}",
+                _fmt(None if theta_meas is None else math.degrees(theta_meas), 3),
+                _fmt(omega_meas, 4),
+                f"{theta_deg:.3f}",
+                f"{omega:.4f}",
+                1 if gated else 0,
+                ekf.n_rejected,
+                f"{math.degrees(theta_ctrl):.3f}",
+                f"{omega_ctrl:.4f}",
+                f"{ekf.P[0, 0]:.6e}",
+                f"{ekf.P[1, 1]:.6e}",
+                f"{u_pwm:.2f}",
+                pwm,
+                1 if abs(pwm) >= PWM_LIMIT else 0,
+                1 if abs(u_pwm) < PWM_DEADBAND else 0,
+                f"{cart_pos_m:.4f}",
+                f"{cart_vel_m_s:.4f}",
+            ])
+            _diag_rows += 1
+
             # CSV columns match swing-up's log writer (t, θ, ω, _, pwm, pos).
             # We dump cart_vel_m_s into the E_diff column to keep the schema.
             log_writer.writerow([f"{t:.4f}", f"{theta_deg:.2f}", f"{omega:.4f}",
@@ -330,3 +383,12 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
         comm.send_velocity(0)
         print("\n  [LQR] interrupted")
         return 'interrupt'
+    finally:
+        # runs on every exit (fall / boundary / interrupt / exception) so the
+        # diagnostic CSV is always flushed and closed.
+        try:
+            _diag_f.flush()
+            _diag_f.close()
+            print(f"  [LQR] diag saved {_diag_rows} rows -> {_diag_path}")
+        except Exception:
+            pass
