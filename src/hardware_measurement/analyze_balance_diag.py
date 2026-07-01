@@ -23,8 +23,9 @@ Usage:
     python analyze_balance_diag.py <file.csv>         # a specific file
     python analyze_balance_diag.py --no-plot          # newest, text only
 
-By default (no file given) it grabs the MOST RECENT balance_diag_*.csv in src/
-(where balance_lqr.py writes them), so you never edit a filename between runs.
+By default (no file given) it grabs the MOST RECENT balance_diag_*.csv in the
+shared BALANCE_DIAG_DIR (defined in config.py, where balance_lqr.py writes them),
+so you never edit a filename between runs and the paths can't drift apart.
 
 All plot labels are English (project rule).
 """
@@ -36,12 +37,14 @@ from pathlib import Path
 
 import numpy as np
 
-# config (PWM_DEADBAND, PWM_LIMIT) lives in the parent src/ dir.
+# config (PWM_DEADBAND, PWM_LIMIT, BALANCE_DIAG_DIR) lives in the parent src/ dir.
+# BALANCE_DIAG_DIR is the SAME constant balance_lqr.py writes to → paths can't drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from config import PWM_DEADBAND, PWM_LIMIT
-except Exception:
-    PWM_DEADBAND, PWM_LIMIT = 22, 200      # fallbacks if run outside the project
+    from config import PWM_DEADBAND, PWM_LIMIT, BALANCE_DIAG_DIR
+except Exception:                          # fallbacks if run outside the project
+    PWM_DEADBAND, PWM_LIMIT = 30, 255
+    BALANCE_DIAG_DIR = str(Path(__file__).resolve().parent.parent / "balance_diag")
 
 # ── good-state thresholds (what counts as "should have been recoverable") ──
 GOOD_ANGLE_DEG = 4.0
@@ -210,9 +213,8 @@ def plot(c):
 
 
 def newest_diag():
-    """Most recent balance_diag_*.csv in src/ (parent of this script)."""
-    src_dir = str(Path(__file__).resolve().parent.parent)
-    files = glob.glob(os.path.join(src_dir, "balance_diag_*.csv"))
+    """Most recent balance_diag_*.csv in the shared BALANCE_DIAG_DIR (config)."""
+    files = glob.glob(os.path.join(BALANCE_DIAG_DIR, "balance_diag_*.csv"))
     if not files:
         return None
     return max(files, key=os.path.getmtime)
@@ -226,8 +228,8 @@ def main():
     else:
         path = newest_diag()
         if path is None:
-            print("no balance_diag_*.csv found in src/ — run a balance first,"
-                  " or pass a path explicitly.")
+            print(f"no balance_diag_*.csv found in {BALANCE_DIAG_DIR} — run a"
+                  " balance first, or pass a path explicitly.")
             sys.exit(1)
         print(f"  (auto) newest -> {os.path.basename(path)}")
     if not os.path.exists(path):
