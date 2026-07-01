@@ -13,6 +13,7 @@ Rule of thumb when adding something here:
 """
 
 import math
+import os
 
 # ════════════════════════════════════════════════════════════════════════
 #  Hardware physics  (measured — change here, propagates everywhere)
@@ -98,6 +99,16 @@ RECENTER_TIMEOUT_S     = 10.0   # give up after this many seconds
 DEFAULT_SERIAL_PORT = "/dev/ttyUSB0"   # Pi is the host now (2026-05-29); override per-script if needed
 SERIAL_BAUD         = 115200
 DEFAULT_ZMQ_ADDR    = "tcp://127.0.0.1:9999"   # V3 PUB runs on same Pi (2026-05-29)
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Diagnostics / logging  (single source of truth for output paths)
+# ════════════════════════════════════════════════════════════════════════
+# One canonical folder for balance diagnostic CSVs. balance_lqr.py WRITES here,
+# analyze_balance_diag.py READS the newest file from here. Both import this
+# constant so the two can never drift apart (no fragile __file__ path guessing).
+BALANCE_DIAG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "balance_diag")
 
 
 # ════════════════════════════════════════════════════════════════════════
