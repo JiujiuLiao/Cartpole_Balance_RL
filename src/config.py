@@ -30,9 +30,22 @@ M_PER_PULSE      = math.pi * WHEEL_DIAMETER_M / PULSES_PER_REV
 # pwm_range_20260527_150747.csv (speed/pps = 0.0001143 across all PWMs).
 
 # ── Pendulum geometry & masses ───────────────────────
-PENDULUM_L_M     = 0.34         # effective rod length (pivot → CoM)
+PENDULUM_L_M     = 0.34         # rod length pivot → far end (m)
 CART_MASS_KG     = 1.014        # cart + motor + holder + wheels (no pole)
-PENDULUM_MASS_KG = 0.127        # rod only
+
+# Pendulum mass distribution (measured 2026-06-10). NON-uniform: mass lumps
+# at the two ends. compute_lqr_K.py uses these to build I_cm exactly;
+# swing-up and balance_pd only need the total below (point-mass approx).
+PENDULUM_ROD_MASS_KG    = 0.024     # uniform rod
+PENDULUM_PIVOT_MASS_KG  = 0.053     # connector lump at pivot (r = 0)
+PENDULUM_TIP_MASS_KG    = 0.052     # weight at far end       (r = PENDULUM_L_M)
+PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
+                           + PENDULUM_PIVOT_MASS_KG
+                           + PENDULUM_TIP_MASS_KG)   # = 0.129 kg (derived)
+
+# ── Motor force calibration (used by LQR / RL) ───────
+# F_eff(PWM=255) ≈ 3.429 N (measured) → 3.429 / 255 = 0.01345 N per PWM unit.
+FORCE_PER_PWM = 0.01345
 
 # ── World ────────────────────────────────────────────
 GRAVITY = 9.81                  # m/s²
