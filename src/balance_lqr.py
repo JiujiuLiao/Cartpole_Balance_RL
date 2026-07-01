@@ -24,6 +24,7 @@ import time
 
 from config import (
     M_PER_PULSE, MAX_PULSES, PWM_DEADBAND, PWM_LIMIT, GIVEUP_ANGLE_DEG,
+    BALANCE_DIAG_DIR,
 )
 from ekf import PendulumEKF
 
@@ -168,8 +169,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     #   raw camera meas  ->  EKF state  ->  predicted (LQR-input) state  ->
     #   pre-clamp force  ->  post-clamp PWM,  plus timing + gating + covariance.
     # Analyze with hardware_measurement/analyze_balance_diag.py.
+    os.makedirs(BALANCE_DIAG_DIR, exist_ok=True)   # shared dir (config); create if new
     _diag_name = time.strftime("balance_diag_%Y%m%d_%H%M%S.csv")
-    _diag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _diag_name)
+    _diag_path = os.path.join(BALANCE_DIAG_DIR, _diag_name)
     _diag_f    = open(_diag_path, "w", newline="")
     _diag_w    = csv.writer(_diag_f)
     _diag_w.writerow([
