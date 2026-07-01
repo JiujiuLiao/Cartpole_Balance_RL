@@ -46,11 +46,14 @@ except AttributeError:
 #                      + K_X*x + K_X_DOT*x_dot)   (see ~line 294)
 # Computed by compute_lqr_K.py (Riccati solution), NOT hand-tuned.
 # Larger magnitude = that state is weighted more heavily / corrected harder.
-K_THETA      = -1752.4887   # pole angle theta [rad] — largest; primary balancer
-K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
-K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
-K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-
+#K_THETA      = -1752.4887   # pole angle theta [rad] — largest; primary balancer
+#K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
+#K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
+#K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
+K_THETA      = -1780.6200    # theta gain
+K_THETA_DOT  = -284.4272    # theta_dot gain
+K_X          = -3.1623    # cart-position gain
+K_X_DOT      = -25.4798    # cart-velocity gain
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
