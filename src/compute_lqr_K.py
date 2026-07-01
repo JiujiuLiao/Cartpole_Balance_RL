@@ -5,9 +5,9 @@ Runs ON: PC with scipy + numpy (NOT on Pi).
 Output : 4 numbers to paste into balance_lqr.py.
 
 Usage:
-    1. Measure physical parameters in lab tomorrow.
-    2. Edit the "PHYSICAL PARAMETERS" block below.
-    3. Tune Q diagonal entries to taste (start from Varghese 2017 values).
+    1. Measure physical parameters in lab.
+    2. Update values in **config.py** (single source of truth).
+    3. Tune Q diagonal entries below (LQR-specific, stays local).
     4. python3 compute_lqr_K.py
     5. Copy printed K = [k1, k2, k3, k4] into balance_lqr.py.
 
@@ -26,25 +26,24 @@ from scipy.linalg import solve_continuous_are
 
 
 # ======================================================================
-# PHYSICAL PARAMETERS  (raw measured values)
+# PHYSICAL PARAMETERS  (single source of truth: config.py)
 # ======================================================================
-M_c = 1.014        # cart mass (kg) — measured 2026-05-27
-g   = 9.81         # gravity (m/s^2)
+# Single-letter aliases below match textbook notation for the derivations.
+# To change any value, edit config.py — NOT here.
+from config import (
+    CART_MASS_KG            as M_c,
+    GRAVITY                 as g,
+    PENDULUM_L_M            as L_rod,
+    PENDULUM_ROD_MASS_KG    as m_rod,
+    PENDULUM_PIVOT_MASS_KG  as m_pivot,
+    PENDULUM_TIP_MASS_KG    as m_tip,
+    PENDULUM_MASS_KG        as m_p,
+    FORCE_PER_PWM,
+)
 
-# --- Pendulum mass distribution (measured 2026-06-10) ---
-# The pendulum is NOT a uniform rod: the mass sits mostly at the two ends, so
-# we build the FULL physical model with rotational inertia I (same derivation
-# as the reference project tarunkumarnyu/main.cpp), NOT the point-mass
-# approximation. All distances are measured FROM THE PIVOT (rotation axis).
-# ⚠️ CONFIRM these distances against the real hardware.
-L_rod   = 0.34     # rod length (m): pivot -> far end
-m_rod   = 0.024    # uniform rod (kg)
-m_pivot = 0.053    # connector lump AT the pivot        (r = 0)
-m_tip   = 0.052    # weight at the far end              (r = L_rod)
-r_pivot = 0.0      # connector distance from pivot (m)
-r_tip   = L_rod    # tip-weight distance from pivot (m)
-
-m_p = m_rod + m_pivot + m_tip          # total pendulum mass (kg)
+# Lumped-mass distances from the pivot
+r_pivot = 0.0
+r_tip   = L_rod
 
 # Center of mass distance from pivot:  l = Σ(m_i·r_i) / Σ m_i
 l_p = (m_pivot * r_pivot
@@ -107,9 +106,8 @@ A = np.array([
     [-m * m * g * l * l / p,    0.0, 0.0, 0.0],   # x_ddot from theta
 ])
 
-# B in NEWTONS, then scaled by FORCE_PER_PWM so the resulting K comes out
-# directly in PWM units (no extra multiply needed in balance_lqr.py).
-FORCE_PER_PWM = 0.01345    # N per PWM. F_eff(PWM=255) ≈ 3.429 N → 3.429/255.
+# B in NEWTONS, then scaled by FORCE_PER_PWM (from config) so the resulting K
+# comes out directly in PWM units (no extra multiply needed in balance_lqr.py).
 B = np.array([
     [0.0],
     [-m * l / p],            # theta_ddot from F
