@@ -42,6 +42,7 @@ Tuning order (after diagnostic passes):
 import time
 import sys
 import csv
+import os
 import threading
 import math
 from datetime import datetime
@@ -50,7 +51,7 @@ from motor_comm import MotorComm
 from camera_comm import CameraSubscriber
 from config import (
     DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
-    PENDULUM_L_M, MAX_PULSES,
+    PENDULUM_L_M, MAX_PULSES, BALANCE_LOGS_DIR,
     PWM_LIMIT, PWM_DEADBAND, GIVEUP_ANGLE_DEG,
 )
 
@@ -197,8 +198,10 @@ def main():
     print(f"  {'-' * 78}")
 
     # ---- CSV log (one file per run) -------------------------------------
-    log_path   = f"balance_log_{datetime.now():%Y%m%d_%H%M%S}_Kp{Kp:g}_Kd{Kd:g}_Kx{Kx:g}.csv"
-    log_file   = open(log_path, "w", newline="")
+    os.makedirs(BALANCE_LOGS_DIR, exist_ok=True)
+    log_name = f"balance_log_{datetime.now():%Y%m%d_%H%M%S}_Kp{Kp:g}_Kd{Kd:g}_Kx{Kx:g}.csv"
+    log_path = os.path.join(BALANCE_LOGS_DIR, log_name)
+    log_file = open(log_path, "w", newline="")
     log_writer = csv.writer(log_file)
     log_writer.writerow(["t", "theta_deg", "omega", "cart_pos",
                          "pwm_raw", "pwm", "pole_up", "status"])

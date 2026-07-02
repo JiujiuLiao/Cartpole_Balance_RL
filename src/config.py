@@ -117,11 +117,15 @@ DEFAULT_ZMQ_ADDR    = "tcp://127.0.0.1:9999"   # V3 PUB runs on same Pi (2026-05
 # ════════════════════════════════════════════════════════════════════════
 #  Diagnostics / logging  (single source of truth for output paths)
 # ════════════════════════════════════════════════════════════════════════
-# One canonical folder for balance diagnostic CSVs. balance_lqr.py WRITES here,
-# analyze_balance_diag.py READS the newest file from here. Both import this
-# constant so the two can never drift apart (no fragile __file__ path guessing).
-BALANCE_DIAG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "balance_diag")
+# All time-stamped run outputs live in <project_root>/data/. Writers and
+# analyzers both import from here so they can never drift apart.
+_PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DATA_DIR       = os.path.join(_PROJECT_ROOT, "data")
+
+BALANCE_DIAG_DIR = os.path.join(_DATA_DIR, "balance_diag")   # balance_lqr writes, analyze_balance_diag reads
+BALANCE_LOGS_DIR = os.path.join(_DATA_DIR, "balance_logs")   # tune_balance_pd writes
+SWINGUP_LOGS_DIR = os.path.join(_DATA_DIR, "swingup_logs")   # swing_up_* writes
+CALIBRATION_DIR  = os.path.join(_DATA_DIR, "calibration")    # measure_*, test_* write
 
 
 # ════════════════════════════════════════════════════════════════════════
