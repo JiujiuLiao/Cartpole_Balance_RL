@@ -171,7 +171,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     # parameter from hardware offline:
     #   raw camera meas  ->  EKF state  ->  predicted (LQR-input) state  ->
     #   pre-clamp force  ->  post-clamp PWM,  plus timing + gating + covariance.
-    # Analyze with hardware_measurement/analyze_balance_diag.py.
+    # Analyze with analysis/analyze_balance_diag.py.
     os.makedirs(BALANCE_DIAG_DIR, exist_ok=True)   # shared dir (config); create if new
     _diag_name = time.strftime("balance_diag_%Y%m%d_%H%M%S.csv")
     _diag_path = os.path.join(BALANCE_DIAG_DIR, _diag_name)

@@ -79,8 +79,12 @@ YELLOW_MAX_AXIS_DIST_PX = 320
 
 OMEGA_LPF_ALPHA = 0.55           # EMA: ~3-frame time constant @120fps (~25ms)
 
-AXIS_CALIB_FILE = "axis_calib.json"
-HSV_CALIB_FILE = "hsv_calib.json"
+# Calibration files live next to this script — so path stays valid regardless
+# of the CWD from which the user launches python3 (fix 2026-07-02 after moving
+# V3 from src/hardware_measurement/ to src/vision/).
+_VISION_DIR = os.path.dirname(os.path.abspath(__file__))
+AXIS_CALIB_FILE = os.path.join(_VISION_DIR, "axis_calib.json")
+HSV_CALIB_FILE  = os.path.join(_VISION_DIR, "hsv_calib.json")
 # Port 9999 + legacy CSV format to stay compatible with camera_comm.py /
 # balance_pid.py (which read parts[4]=theta, parts[5]=omega, parts[6]=pole_up).
 ZMQ_ENDPOINT = "tcp://*:9999"

@@ -152,7 +152,7 @@ def main():
     n_drained = cam.drain()
     if n_drained == 0:
         print("  WARNING: no camera data received. Is the camera script running?")
-        print("  On Raspberry Pi: python3 hardware_measurement/camerapreview_detect_color_V3.py")
+        print("  On Raspberry Pi: python3 vision/camerapreview_detect_color_V3.py")
         comm.close()
         cam.close()
         return

@@ -8,9 +8,9 @@ Pairs with `balance_pd.py` (library) — same control law, different entry.
 
 
 TWO-PROCESS architecture, both ON the Raspberry Pi:
-    Terminal 1:  python3 hardware_measurement/camerapreview_detect_color_V3.py
+    Terminal 1:  python3 vision/camerapreview_detect_color_V3.py
                  -> vision (verified correct), PUBs theta/omega/pole_up on :9999
-    Terminal 2:  python3 balance_pid.py        (this file)
+    Terminal 2:  python3 tune_balance_pd.py        (this file)
                  -> SUBs the angle stream -> PID -> serial -> ESP32
 
 This file no longer does any image processing. The angle comes from V3 over

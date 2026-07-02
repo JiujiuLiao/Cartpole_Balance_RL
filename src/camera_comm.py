@@ -2,10 +2,10 @@
 Shared ZMQ subscriber for the camera angle stream.
 
 Replaces the duplicated context/socket boilerplate in:
-  balance_pid.py, swing_up_energy_dc.py, measure_sigma_theta.py,
-  hardware_measurement/{acquire_pendulum_dynamics.py, pc_end_to_end_latency.py}.
+  tune_balance_pd.py, swing_up_energy_dc.py, measure_sigma_theta.py,
+  calibration/acquire_pendulum_dynamics.py, latency_tests/pc_end_to_end_latency.py.
 
-The publisher is camerapreview_detect_color_V3.py on the Raspberry Pi.
+The publisher is vision/camerapreview_detect_color_V3.py on the Raspberry Pi.
 
 Wire format (CSV string from the Pi):
   parts[0..4]  five most recent angles (rad); parts[4] is the newest

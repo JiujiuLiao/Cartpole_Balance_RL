@@ -29,30 +29,60 @@ The PC is used only for SSH-based editing, monitoring, and offline analysis.
 
 ---
 
-## Directory Layout (inside cartpole-pid/)
+## Directory Layout (inside cartpole-classical-control/)
 
 ```
-cartpole-pid/
+cartpole-classical-control/
 ├── CLAUDE.md                        ← this file (code-level)
+├── data/                            ← ALL time-stamped CSV outputs live here
+│   ├── balance_diag/                    balance_lqr writes; analyze_balance_diag reads
+│   ├── balance_logs/                    tune_balance_pd writes
+│   ├── swingup_logs/                    swing_up_* writes
+│   └── calibration/                     measurement scripts write here
 ├── pi/                              ← runs ON the Raspberry Pi
 │   ├── pi_balance.py                ← MAIN: balance PID controller
 │   └── pi_latency.py                ← latency measurement
-├── src/                             ← runs on PC + shared library
-│   ├── config.py                    ← single source of truth (parameters)
+├── src/                             ← Python code
+│   │  ── core libraries (top level; shared, imported by everything) ──
+│   ├── config.py                    ← single source of truth (parameters + data paths)
 │   ├── motor_comm.py                ← MotorComm class — ESP32 serial protocol
 │   ├── camera_comm.py               ← LEGACY (ZMQ subscriber, old arch)
-│   ├── balance_pid.py               ← LEGACY (PC-loop balance)
-│   ├── camerapreview_detect_color2.py  ← LEGACY (Pi ZMQ publisher)
-│   ├── swing_up_dc.py               ← swing-up controller (active)
-│   ├── swing_up_energy_dc.py        ← energy-based swing-up (alt)
+│   ├── ekf.py                       ← state estimator (angle + omega)
+│   │  ── control algorithm libraries ──
+│   ├── balance_pd.py                ← PD balance loop  (called by swing-up)
+│   ├── balance_lqr.py               ← LQR balance loop (called by swing-up)
+│   ├── compute_lqr_K.py             ← LQR K solver (offline, pairs with balance_lqr)
+│   ├── test_balance_lqr.py          ← simulation test for LQR
+│   │  ── runnable entry-point scripts ──
+│   ├── swing_up_energy_dc.py        ← energy-method swing-up + dispatch to balance
+│   ├── swing_up_dc_without_camera.py    swing-up without vision
 │   ├── move_cart2_center.py         ← helper: return cart to center
-│   ├── measure_sigma_theta.py      ← static-pole recorder → prints EKF_SIGMA_THETA
-│   ├── analyze_*.py                 ← offline analysis scripts
-│   └── hardware_measurement/        ← calibration / standalone tests
+│   ├── tune_balance_pd.py           ← standalone PD tuner (matches `balance_pd.py`)
+│   ├── measure_sigma_theta.py       ← static-pole → prints EKF_SIGMA_THETA
+│   ├── camerapreview_detect_color2_henry.py  ← LEGACY
+│   ├── analyze_swingup.py, plot_swingup.py, compare_pendulum_cart_half_period.py
+│   │  ── subdirectories (organized by role, 2026-07 refactor) ──
+│   ├── calibration/                 ← one-off hardware measurement
+│   │   ├── measure_ppr.py, test_pwm_range.py, test_accel_burst.py,
+│   │   ├── test_vmax.py, fit_force_curve.py, collect_b_data.py,
+│   │   ├── fit_ekf_b.py, record_validation_data.py,
+│   │   ├── acquire_pendulum_dynamics.py, test_frame_delay.py
+│   ├── analysis/                    ← offline CSV analysis + plotting
+│   │   ├── analyze_pendulum.py, analyze_balance_diag.py, analyze_ekf_vs_meas.py,
+│   │   ├── compare_omega_filters.py, plot_vmax.py
+│   ├── latency_tests/               ← end-to-end latency probing
+│   │   ├── pc_end_to_end_latency.py, pi_latency_full.py, pi_vision_latency.py
+│   └── vision/                      ← Pi-side real-time vision (currently active)
+│       ├── camerapreview_detect_color_V3.py     ← current vision publisher
+│       └── axis_calib.json                       ← pivot-axis persistence
 ├── dc_motor_controller/             ← ESP32 firmware (Arduino sketch)
 ├── cartpole/                        ← legacy package, do not extend
 └── achive/                          ← archived, do not reference
 ```
+
+Scripts in `calibration/`, `analysis/`, `latency_tests/`, `vision/` add `src/`
+to `sys.path` at the top (same pattern as `pi/` — see below) so they can
+`from config import ...` and `from motor_comm import ...`.
 
 ---
 
