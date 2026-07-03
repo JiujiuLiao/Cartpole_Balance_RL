@@ -46,6 +46,10 @@ import os
 import threading
 import math
 from datetime import datetime
+from pathlib import Path
+
+# Expose src/ (top-level libs).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber

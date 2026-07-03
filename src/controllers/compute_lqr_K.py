@@ -21,8 +21,14 @@ State vector convention (matches balance_lqr.py exactly):
 Control law: u = -K @ x   (u in Newtons if FORCE_PER_PWM = 1)
 """
 
+import sys
+from pathlib import Path
+
 import numpy as np
 from scipy.linalg import solve_continuous_are
+
+# Expose src/ (top-level libs).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # ======================================================================

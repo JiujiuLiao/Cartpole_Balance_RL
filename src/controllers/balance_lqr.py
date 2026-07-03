@@ -20,7 +20,12 @@ K is in PWM units because compute_lqr_K.py uses FORCE_PER_PWM in B.
 import csv
 import math
 import os
+import sys
 import time
+from pathlib import Path
+
+# Expose src/ (top-level libs: config, motor_comm, camera_comm, ekf).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import (
     M_PER_PULSE, MAX_PULSES, PWM_DEADBAND, PWM_LIMIT, GIVEUP_ANGLE_DEG,

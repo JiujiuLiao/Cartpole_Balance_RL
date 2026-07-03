@@ -35,6 +35,10 @@ import sys
 import os
 import math
 import statistics
+from pathlib import Path
+
+# Expose src/ (top-level libs).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from camera_comm import CameraSubscriber
 from config import DEFAULT_ZMQ_ADDR

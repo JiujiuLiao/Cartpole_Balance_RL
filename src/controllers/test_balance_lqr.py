@@ -27,6 +27,11 @@ import time
 import csv
 import math
 import os
+from pathlib import Path
+
+# Expose src/ (top-level libs). balance_lqr sits next to this file so it
+# resolves via the script's own directory automatically.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber

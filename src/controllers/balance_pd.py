@@ -18,7 +18,12 @@ config.py — historical exception noted in ../CLAUDE.md.
 """
 
 import math
+import sys
 import time
+from pathlib import Path
+
+# Expose src/ (top-level libs: config, motor_comm, camera_comm, ekf).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import (
     Kp, Kd, Kx, ANGLE_SIGN, OMEGA_SIGN, CART_SIGN,

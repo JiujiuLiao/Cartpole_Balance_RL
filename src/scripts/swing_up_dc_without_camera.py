@@ -21,6 +21,10 @@ Usage:
 
 import time
 import sys
+from pathlib import Path
+
+# Expose src/ (top-level libs).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor_comm import MotorComm
 from config import (DEFAULT_SERIAL_PORT, SERIAL_BAUD,

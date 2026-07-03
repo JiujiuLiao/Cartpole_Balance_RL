@@ -21,6 +21,12 @@ import sys
 import math
 import csv
 import os
+from pathlib import Path
+
+# Expose src/ (top-level libs) and src/controllers/ (balance_pd, balance_lqr).
+_SRC = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(_SRC / "controllers"))
 
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber

@@ -48,20 +48,18 @@ cartpole-classical-control/
 │   ├── motor_comm.py                ← MotorComm class — ESP32 serial protocol
 │   ├── camera_comm.py               ← LEGACY (ZMQ subscriber, old arch)
 │   ├── ekf.py                       ← state estimator (angle + omega)
-│   │  ── control algorithm libraries ──
-│   ├── balance_pd.py                ← PD balance loop  (called by swing-up)
-│   ├── balance_lqr.py               ← LQR balance loop (called by swing-up)
-│   ├── compute_lqr_K.py             ← LQR K solver (offline, pairs with balance_lqr)
-│   ├── test_balance_lqr.py          ← simulation test for LQR
-│   │  ── runnable entry-point scripts ──
-│   ├── swing_up_energy_dc.py        ← energy-method swing-up + dispatch to balance
-│   ├── swing_up_dc_without_camera.py    swing-up without vision
-│   ├── move_cart2_center.py         ← helper: return cart to center
-│   ├── tune_balance_pd.py           ← standalone PD tuner (matches `balance_pd.py`)
-│   ├── measure_sigma_theta.py       ← static-pole → prints EKF_SIGMA_THETA
-│   ├── camerapreview_detect_color2_henry.py  ← LEGACY
-│   ├── analyze_swingup.py, plot_swingup.py, compare_pendulum_cart_half_period.py
 │   │  ── subdirectories (organized by role, 2026-07 refactor) ──
+│   ├── controllers/                 ← control algorithm libraries + tools
+│   │   ├── balance_pd.py            ← PD balance loop  (called by swing-up)
+│   │   ├── balance_lqr.py           ← LQR balance loop (called by swing-up)
+│   │   ├── compute_lqr_K.py         ← LQR K solver (offline, pairs with balance_lqr)
+│   │   └── test_balance_lqr.py      ← simulation test for LQR
+│   ├── scripts/                     ← runnable entry-point scripts (`python xxx.py`)
+│   │   ├── swing_up_energy_dc.py    ← energy-method swing-up + dispatch to balance
+│   │   ├── swing_up_dc_without_camera.py    ← swing-up without vision
+│   │   ├── tune_balance_pd.py       ← standalone PD tuner (pairs with `balance_pd.py`)
+│   │   ├── move_cart2_center.py     ← helper: return cart to center
+│   │   └── measure_sigma_theta.py   ← static-pole → prints EKF_SIGMA_THETA
 │   ├── calibration/                 ← one-off hardware measurement
 │   │   ├── measure_ppr.py, test_pwm_range.py, test_accel_burst.py,
 │   │   ├── test_vmax.py, fit_force_curve.py, collect_b_data.py,
@@ -69,7 +67,8 @@ cartpole-classical-control/
 │   │   ├── acquire_pendulum_dynamics.py, test_frame_delay.py
 │   ├── analysis/                    ← offline CSV analysis + plotting
 │   │   ├── analyze_pendulum.py, analyze_balance_diag.py, analyze_ekf_vs_meas.py,
-│   │   ├── compare_omega_filters.py, plot_vmax.py
+│   │   ├── analyze_swingup.py, plot_swingup.py, plot_vmax.py,
+│   │   └── compare_omega_filters.py, compare_pendulum_cart_half_period.py
 │   ├── latency_tests/               ← end-to-end latency probing
 │   │   ├── pc_end_to_end_latency.py, pi_latency_full.py, pi_vision_latency.py
 │   └── vision/                      ← Pi-side real-time vision (currently active)
@@ -80,9 +79,14 @@ cartpole-classical-control/
 └── achive/                          ← archived, do not reference
 ```
 
-Scripts in `calibration/`, `analysis/`, `latency_tests/`, `vision/` add `src/`
-to `sys.path` at the top (same pattern as `pi/` — see below) so they can
+Scripts inside ANY subdirectory of `src/` (`controllers/`, `scripts/`,
+`calibration/`, `analysis/`, `latency_tests/`, `vision/`) add `src/` to
+`sys.path` at the top (same pattern as `pi/` — see below) so they can
 `from config import ...` and `from motor_comm import ...`.
+
+`scripts/swing_up_energy_dc.py` additionally puts `src/controllers/` on
+`sys.path` so it can `from balance_pd import ...` / `from balance_lqr import ...`.
+Add the same second line to any new script that imports a controller.
 
 ---
 
