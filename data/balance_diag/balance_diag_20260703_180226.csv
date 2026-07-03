@@ -1,0 +1,2 @@
+loop_t_mono,t,sensor_ts_ns,frame_age,t_delay_dyn,dt_ekf,theta_meas_deg,omega_meas,theta_ekf_deg,omega_ekf,gated,n_rejected,theta_ctrl_deg,omega_ctrl,P_theta,P_omega,u_pwm,pwm,saturated,in_deadband,cart_pos_m,cart_vel_m_s
+1783094546.226174,101.1559,6679411352000,0.041796,0.058796,0.012782,-9.933,-0.2173,-9.933,-0.2173,0,0,-11.266,-0.5532,5.000000e-01,4.000000e+00,-619.73,-255,1,0,0.0467,-0.2896
