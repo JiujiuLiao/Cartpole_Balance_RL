@@ -30,15 +30,15 @@ M_PER_PULSE      = math.pi * WHEEL_DIAMETER_M / PULSES_PER_REV
 # pwm_range_20260527_150747.csv (speed/pps = 0.0001143 across all PWMs).
 
 # ── Pendulum geometry & masses ───────────────────────
-PENDULUM_L_M     = 0.34         # rod length pivot → far end (m)
+PENDULUM_L_M     = 0.40         # rod length pivot → far end (m)
 CART_MASS_KG     = 1.014        # cart + motor + holder + wheels (no pole)
 
 # Pendulum mass distribution (measured 2026-06-10). NON-uniform: mass lumps
 # at the two ends. compute_lqr_K.py uses these to build I_cm exactly;
 # swing-up and balance_pd only need the total below (point-mass approx).
-PENDULUM_ROD_MASS_KG    = 0.024     # uniform rod
+PENDULUM_ROD_MASS_KG    = 0.10     # uniform rod
 PENDULUM_PIVOT_MASS_KG  = 0.053     # connector lump at pivot (r = 0)
-PENDULUM_TIP_MASS_KG    = 0.052     # weight at far end       (r = PENDULUM_L_M)
+PENDULUM_TIP_MASS_KG    = 0.0     # weight at far end       (r = PENDULUM_L_M)
 PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
                            + PENDULUM_PIVOT_MASS_KG
                            + PENDULUM_TIP_MASS_KG)   # = 0.129 kg (derived)
@@ -53,7 +53,7 @@ GRAVITY = 9.81                  # m/s²
 # ── Track geometry & safety margin ───────────────────
 TRACK_LENGTH_M  = 0.84                          # full physical track length
 TRACK_HALF_M    = TRACK_LENGTH_M / 2            # 0.42 m, center → end
-SAFETY_MARGIN_M = 0.05                          # never get within this of the end
+SAFETY_MARGIN_M = 0.1                          # never get within this of the end
 USABLE_HALF_M   = TRACK_HALF_M - SAFETY_MARGIN_M  # 0.37 m (controllers' boundary)
 
 
