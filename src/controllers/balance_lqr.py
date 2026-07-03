@@ -55,7 +55,7 @@ except AttributeError:
 #K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
 #K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
 #K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-K_THETA      = -1780.6200 * 1.2    # theta gain
+K_THETA      = -1780.6200 * 1.3    # theta gain
 K_THETA_DOT  = -284.4272    # theta_dot gain
 K_X          = -3.1623    # cart-position gain
 K_X_DOT      = -25.4798    # cart-velocity gain
