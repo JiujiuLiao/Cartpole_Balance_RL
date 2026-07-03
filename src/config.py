@@ -78,10 +78,9 @@ MAX_PULSES = 2624 #3238 (USABLE_HALF_M=0.37 m at M_PER_PULSE=0.1143 mm).
 # ════════════════════════════════════════════════════════════════════════
 
 PWM_LIMIT        = 255          # IBT-2 absolute max — DO NOT exceed.
-PWM_MAX_SAFE     = 200          # recommended ceiling: cart speed ≈ 0.23 m/s
-                                # at this PWM (measured 2026-05-27). Above 200,
-                                # cart traverses half-track in <1.5 s — too
-                                # little control margin.
+                                # (A softer ceiling of ~200 keeps cart speed
+                                # ≈ 0.23 m/s and gives more control margin;
+                                # tighten PWM_LIMIT here if that becomes needed.)
 PWM_DEADBAND     = 30           # measured 2026-05-27: below |PWM|=22 cart
                                 # does not move. Asymmetric (fwd ≈ 103 pps,
                                 # rev ≈ 70 pps at PWM=22).
@@ -129,11 +128,12 @@ CALIBRATION_DIR  = os.path.join(_DATA_DIR, "calibration")    # measure_*, test_*
 
 
 # ════════════════════════════════════════════════════════════════════════
-#  pi/pi_balance.py gains  (owned by that script only — do not reuse)
+#  controllers/balance_pd.py gains  (historical exception — do not reuse)
 # ════════════════════════════════════════════════════════════════════════
-# These exist here because pi_balance.py imports them. The newer balance_pid.py
-# and balance_lqr.py keep their own gains locally — different controllers
-# tune independently. New scripts: do NOT import these.
+# balance_pd.py imports these because tune_balance_pd.py tweaks them here
+# during lab sessions. balance_lqr.py keeps its K locally in its own file —
+# different controllers tune independently. New controllers: do NOT reuse
+# these names; define your own local gains and cite the tuning date.
 Kp = 40.0                       # angle proportional gain (PWM per degree)
                                 # 80 (too aggressive, slammed at small θ)
                                 # → 10 (too gentle — at θ=8° pwm only +80, cart

@@ -17,9 +17,6 @@ Steps:
     3. CSV saved automatically when recording ends
 
 Output: pendulum_YYYYMMDD_HHMMSS.csv  ->  analyze with analyze_pendulum.py (on PC)
-
-See also: cartpole-dc/log_angle.py  - records angle during active swing-up
-          (runs on PC, motor running at the same time)
 """
 
 import csv

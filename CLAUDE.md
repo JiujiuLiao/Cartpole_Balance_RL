@@ -23,9 +23,13 @@ picamera2 frame  →  HSV mask  →  marker angle  →  PID  →  serial  →  E
 
 The PC is used only for SSH-based editing, monitoring, and offline analysis.
 
-**Implication for AI:** scripts that depend on ZMQ between Pi and PC
-(`src/camerapreview_detect_color2.py`, `src/camera_comm.py`,
-`src/balance_pid.py`) are **legacy**. The new entrypoint is `pi/pi_balance.py`.
+**Implication for AI:** scripts that depend on the old cross-machine ZMQ
+setup (`src/camera_comm.py`, plus anything importing from it) are **legacy**.
+Current entry points:
+- Swing-up + balance handoff: `scripts/swing_up_energy_dc.py`
+- Standalone PD tuning:       `scripts/tune_balance_pd.py`
+Vision (`vision/camerapreview_detect_color_V3.py`) runs on the Pi and
+publishes over ZMQ to the same Pi — no cross-machine socket.
 
 ---
 
@@ -39,9 +43,6 @@ cartpole-classical-control/
 │   ├── balance_logs/                    tune_balance_pd writes
 │   ├── swingup_logs/                    swing_up_* writes
 │   └── calibration/                     measurement scripts write here
-├── pi/                              ← runs ON the Raspberry Pi
-│   ├── pi_balance.py                ← MAIN: balance PID controller
-│   └── pi_latency.py                ← latency measurement
 ├── src/                             ← Python code
 │   │  ── core libraries (top level; shared, imported by everything) ──
 │   ├── config.py                    ← single source of truth (parameters + data paths)
@@ -75,14 +76,19 @@ cartpole-classical-control/
 │       ├── camerapreview_detect_color_V3.py     ← current vision publisher
 │       └── axis_calib.json                       ← pivot-axis persistence
 ├── dc_motor_controller/             ← ESP32 firmware (Arduino sketch)
-├── cartpole/                        ← legacy package, do not extend
 └── achive/                          ← archived, do not reference
 ```
 
 Scripts inside ANY subdirectory of `src/` (`controllers/`, `scripts/`,
 `calibration/`, `analysis/`, `latency_tests/`, `vision/`) add `src/` to
-`sys.path` at the top (same pattern as `pi/` — see below) so they can
-`from config import ...` and `from motor_comm import ...`.
+`sys.path` at the top so they can `from config import ...`
+and `from motor_comm import ...`:
+
+```python
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+```
 
 `scripts/swing_up_energy_dc.py` additionally puts `src/controllers/` on
 `sys.path` so it can `from balance_pd import ...` / `from balance_lqr import ...`.
@@ -103,34 +109,26 @@ Add the same second line to any new script that imports a controller.
 
 ---
 
-## How `pi/` Scripts Import from `src/`
-
-Files under `pi/` add `src/` to `sys.path` at the top:
-
-```python
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-from motor_comm import MotorComm
-from config import Kp, Kd, Kx, PWM_LIMIT
-```
-
-Keep this pattern when adding new scripts in `pi/`.
-
----
-
 ## Running Things
 
-```bash
-# On the Raspberry Pi (over SSH):
-python3 ~/cartpole-pid/pi/pi_balance.py /dev/ttyUSB0
-python3 ~/cartpole-pid/pi/pi_latency.py /dev/ttyUSB0
+Every entry point (swing-up, tuner, calibration, analysis) is a script
+inside a `src/*/` subdirectory. Run from the project root:
 
-# On the PC:
-python  src/swing_up_dc.py            # swing-up still runs from PC for now
-python  src/analyze_swingup.py        # offline analysis
+```bash
+# Swing-up + auto-handoff to balance (LQR by default; PD if USE_LQR_BALANCE=False):
+python3 src/scripts/swing_up_energy_dc.py /dev/ttyUSB0
+
+# Standalone PD tuning (find Kp/Kd/Kx by hand, then copy winners into config.py):
+python3 src/scripts/tune_balance_pd.py /dev/ttyUSB0
+
+# Utilities:
+python3 src/scripts/move_cart2_center.py /dev/ttyUSB0
+python3 src/analysis/analyze_swingup.py                 # offline analysis
 ```
+
+The Pi is where hardware scripts run today (its `/dev/ttyUSB0` is the
+ESP32). Vision publisher (`vision/camerapreview_detect_color_V3.py`) must
+be running in a separate terminal before any controller starts.
 
 ---
 
@@ -165,21 +163,19 @@ python  src/analyze_swingup.py        # offline analysis
 
 ## Currently Open Items (PID work in progress)
 
-- [ ] PWM deadband compensation in `pi/pi_balance.py`
 - [ ] `omega` units: convert to deg/s for consistency with `theta_deg`
-- [ ] CSV logging during balance runs
-- [ ] First on-track balance run to find a working (Kp, Kd) pair
+- [ ] First on-track balance run with LQR to confirm K values from `compute_lqr_K.py`
+- [ ] Merge Pi-side tuning branch back into main
 
 ---
 
 ## Legacy / Deprecated — Do Not Extend
 
 These files still build but belong to the old PC-loop architecture.
-Do not add features to them. New work goes in `pi/pi_balance.py`.
+Do not add features to them. New work goes in `scripts/` or `controllers/`.
 
 - `src/camera_comm.py`
 - `src/camerapreview_detect_color2.py`
-- `cartpole/Communicator.py` (superseded by `src/motor_comm.py`)
 - everything under `achive/`
 
 ---
