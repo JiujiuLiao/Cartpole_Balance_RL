@@ -81,7 +81,7 @@ PWM_LIMIT        = 255          # IBT-2 absolute max — DO NOT exceed.
                                 # (A softer ceiling of ~200 keeps cart speed
                                 # ≈ 0.23 m/s and gives more control margin;
                                 # tighten PWM_LIMIT here if that becomes needed.)
-PWM_DEADBAND     = 30           # measured 2026-05-27: below |PWM|=22 cart
+PWM_DEADBAND     = 22           # measured 2026-05-27: below |PWM|=22 cart
                                 # does not move. Asymmetric (fwd ≈ 103 pps,
                                 # rev ≈ 70 pps at PWM=22).
 
