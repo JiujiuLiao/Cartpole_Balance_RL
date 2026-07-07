@@ -124,6 +124,16 @@ EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
                            #   ↓ trust model more (smoother, more lag)
 EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈1.1°).
                            #   TODO: measure from a static recording, set exact.
+EKF_U_TAU_S     = 0.060    # EMA time constant for the PWM fed to the EKF.
+                           # NEVER feed raw last_pwm with b≠0: the delay-
+                           # compensation forward(T≈62ms, u) makes this cycle's
+                           # command depend on last cycle's with loop gain
+                           # |b|·K_THETA_DOT·T = 0.015·1372·0.062 ≈ 1.28 > 1 →
+                           # 50 Hz ±255 chatter (measured testbal_ 201405:
+                           # corr(pwm, ω_ctrl−ω_ekf)=+0.93, 95 sign flips/100
+                           # ticks). A 60ms EMA attenuates the alternating
+                           # component ~20x (loop gain →0.07) while sustained
+                           # pushes still get compensated.
 EKF_INPUT_GAIN  = -0.015   # b = PWM→angular-accel (rad/s² per PWM unit) in the
                            # EKF model ω̇ = ω₀²·sinθ + b·u·cosθ.
                            # Calibrated 2026-07-07 by OFFLINE REPLAY of the 7
@@ -180,7 +190,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                              sigma_theta=EKF_SIGMA_THETA,
                              b=EKF_INPUT_GAIN)
     ekf_ready  = False     # lazily reset() to the first valid frame
-    last_pwm   = 0         # last PWM sent — fed to EKF predict as input u
+    last_pwm   = 0         # last PWM sent
+    u_ema      = 0.0       # low-passed PWM — what the EKF sees as input u
+                           # (see EKF_U_TAU_S: raw last_pwm self-oscillates)
     last_ekf_t = time.time()
     last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
     frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
@@ -282,7 +294,8 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                     ekf.reset(theta_meas, omega_meas)
                     ekf_ready = True
                 else:
-                    ekf.predict(dt_ekf, u=last_pwm)      # roll model fwd by real dt
+                    u_ema += (last_pwm - u_ema) * min(1.0, dt_ekf / EKF_U_TAU_S)
+                    ekf.predict(dt_ekf, u=u_ema)         # roll model fwd by real dt
                     if theta_meas is not None:
                         gated = not ekf.update(theta_meas)  # fuse; True→frame rejected by gate
                 theta_rad, omega = ekf.state()
@@ -344,9 +357,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
             # ---- delay compensation: predict state to "command effect" ----
             if USE_EKF and PREDICT_ENABLE:
                 # Roll the EKF state forward by the (dynamic) delay using the same
-                # nonlinear model (last PWM held as input). Same physics as the
-                # Taylor block below, but consistent with the filter & grav_coef.
-                theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=last_pwm)
+                # nonlinear model. Input = LOW-PASSED pwm, not last_pwm — raw
+                # last_pwm here closes an unstable algebraic loop (EKF_U_TAU_S).
+                theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=u_ema)
             elif PREDICT_ENABLE:
                 theta_ctrl = (theta_rad + omega * t_delay_dyn
                               + 0.5 * GRAV_OVER_LEFF * theta_rad * t_delay_dyn**2)
