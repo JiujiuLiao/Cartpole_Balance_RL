@@ -56,19 +56,29 @@ except AttributeError:
 #K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
 #K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
 #K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-# 2026-07-07: measured-model LQR (c=0.0195 N/PWM, b=16.0 N*s/m in A/B),
-# Bryson Q=(8deg, 2rad/s, 0.15m, 0.20m/s). Two variants solved:
-#   u_max=255 ("hot"):  [-7912, -1372, -1700, -2971]
-#   u_max=120 ("soft"): [-5281,  -925,  -800, -2103]   <- ACTIVE
-# Why soft: with the hot K, u(1deg, 5deg/s) ~ 258 = already saturated, so the
-# loop has NO linear region at real noise levels -> relay-mode 3 Hz growing
-# limit cycle (round-3 hand tests 203159-203413, period 0.29-0.36s, amp
-# 1.9->2.9deg). Round 2 lasted longer only because 50 Hz chatter dithered the
-# mean |pwm| down to ~40 — accidental gain reduction, same lesson.
-K_THETA      = -5281    # theta gain
-K_THETA_DOT  = -925     # theta_dot gain
-K_X          = -800     # cart-position gain
-K_X_DOT      = -2103    # cart-velocity gain
+# 2026-07-07 (evening): DELAY-AWARE gain set + outer-loop low-pass.
+# History of this day's iterations (all hand-test verified, see activity log):
+#   hot  [-7912,-1372,-1700,-2971] and soft [-5281,-925,-800,-2103] both hit a
+#   GROWING ~2.6-3.1 Hz oscillation. Frequency-domain analysis of the full
+#   chain (plant + 45ms camera + EKF + 62ms forward + 27ms actuation + 40ms
+#   v-window), calibrated against 4 rounds of hardware data, showed why:
+#   theta-loop natural freq sqrt(|B2|*K_THETA - w0^2) must stay inside the
+#   delay-tolerable window (~8 rad/s, like the OLD -1780 gains, which never
+#   oscillated at x1.0); the new hot/soft sets put it at 16-21 rad/s where the
+#   ~72ms total delay flips damping negative. The outer loop (K_X_DOT) also
+#   pumps the 2.5 Hz mode unless band-limited — hence OUTER_LP_W below.
+# Model worst closed-loop root: -0.11 (reference: old K, which hardware shows
+# as non-oscillating, maps to +1.44 in the same model -> real margin larger).
+K_THETA      = -1780    # theta gain        (old, delay-compatible scale)
+K_THETA_DOT  = -284     # theta_dot gain    (old, delay-compatible scale)
+K_X          = -200     # cart-position gain  (anti-drift, band-limited)
+K_X_DOT      = -2103    # cart-velocity gain  (anti-drift, band-limited)
+
+# First-order low-pass on the OUTER-loop term (K_X*x + K_X_DOT*v). The outer
+# loop only needs to act on the seconds-scale drift; at 2.5 Hz its lagged
+# feedback destabilizes the pole mode (measured rounds 3-4). 10 rad/s corner
+# keeps drift control intact and removes its gain where it hurts.
+OUTER_LP_W   = 10.0     # rad/s (~1.6 Hz corner)
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
@@ -202,6 +212,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
     last_pwm   = 0         # last PWM sent
     u_ema      = 0.0       # low-passed PWM — what the EKF sees as input u
                            # (see EKF_U_TAU_S: raw last_pwm self-oscillates)
+    outer_f    = 0.0       # low-passed outer-loop term (see OUTER_LP_W)
     last_ekf_t = time.time()
     last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
     frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
@@ -378,10 +389,13 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 omega_ctrl = omega
 
             # ---- LQR (fed the delay-compensated state) -------------
+            # Outer term goes through a first-order low-pass: drift control
+            # needs no bandwidth at 2.5 Hz, where its lag destabilizes the
+            # pole mode (OUTER_LP_W header comment).
+            outer_raw = -(K_X * cart_pos_m + K_X_DOT * cart_vel_m_s)
+            outer_f  += (outer_raw - outer_f) * min(1.0, dt_ekf * OUTER_LP_W)
             u_pwm = -(K_THETA     * theta_ctrl
-                    + K_THETA_DOT * omega_ctrl
-                    + K_X         * cart_pos_m
-                    + K_X_DOT     * cart_vel_m_s)
+                    + K_THETA_DOT * omega_ctrl) + outer_f
             pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, _deadband(PWM_SIGN * u_pwm))))
 
             comm.send_velocity(pwm)
