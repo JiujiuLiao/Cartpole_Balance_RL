@@ -56,10 +56,19 @@ except AttributeError:
 #K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
 #K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
 #K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-K_THETA      = -7912    # theta gain
-K_THETA_DOT  = -1372    # theta_dot gain
-K_X          = -1700    # cart-position gain
-K_X_DOT      = -2971    # cart-velocity gain
+# 2026-07-07: measured-model LQR (c=0.0195 N/PWM, b=16.0 N*s/m in A/B),
+# Bryson Q=(8deg, 2rad/s, 0.15m, 0.20m/s). Two variants solved:
+#   u_max=255 ("hot"):  [-7912, -1372, -1700, -2971]
+#   u_max=120 ("soft"): [-5281,  -925,  -800, -2103]   <- ACTIVE
+# Why soft: with the hot K, u(1deg, 5deg/s) ~ 258 = already saturated, so the
+# loop has NO linear region at real noise levels -> relay-mode 3 Hz growing
+# limit cycle (round-3 hand tests 203159-203413, period 0.29-0.36s, amp
+# 1.9->2.9deg). Round 2 lasted longer only because 50 Hz chatter dithered the
+# mean |pwm| down to ~40 — accidental gain reduction, same lesson.
+K_THETA      = -5281    # theta gain
+K_THETA_DOT  = -925     # theta_dot gain
+K_X          = -800     # cart-position gain
+K_X_DOT      = -2103    # cart-velocity gain
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
