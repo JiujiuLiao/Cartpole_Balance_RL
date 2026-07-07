@@ -49,7 +49,7 @@ SWING_PWM = 200           # PWM applied when pushing (0-255)
                           # starts closer to stable manifold. Trade-off:
                           # swing-up takes a couple more cycles to reach top.
 
-CATCH_ANGLE_DEG = 10.0    # |θ| < this → caught upright, hand off to balance.
+CATCH_ANGLE_DEG = 4.0    # |θ| < this → caught upright, hand off to balance.
                           # Was 8°; relaxed to 10° on 2026-05-29 (4th round)
                           # because empirically the pendulum's natural energy
                           # equilibrium has it peaking at ±9° with ω≈0
