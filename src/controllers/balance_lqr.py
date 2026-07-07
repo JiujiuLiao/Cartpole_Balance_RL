@@ -130,7 +130,7 @@ def _deadband(pwm):
     return pwm
 
 
-def balance_lqr_loop(comm, cam, t0, log_writer):
+def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
     """
     Inline LQR balance. Drop-in replacement for swing_up_energy_dc.balance_loop.
 
@@ -139,6 +139,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
       cam         : CameraSubscriber  (latest_angle -> (theta_rad, omega, pole_up))
       t0          : run start time (for log timestamps, matches swing-up clock)
       log_writer  : csv.writer — same columns as swing-up's log_writer
+      diag_prefix : filename prefix of the per-loop diagnostic CSV. Default is
+                    the swing-up path ("balance_diag"); test_balance_lqr passes
+                    "testbal_diag" so hand-test segments are distinguishable.
 
     Returns 'fall' | 'boundary' | 'interrupt'.
     """
@@ -178,7 +181,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer):
     #   pre-clamp force  ->  post-clamp PWM,  plus timing + gating + covariance.
     # Analyze with analysis/analyze_balance_diag.py.
     os.makedirs(BALANCE_DIAG_DIR, exist_ok=True)   # shared dir (config); create if new
-    _diag_name = time.strftime("balance_diag_%Y%m%d_%H%M%S.csv")
+    _diag_name = time.strftime(f"{diag_prefix}_%Y%m%d_%H%M%S.csv")
     _diag_path = os.path.join(BALANCE_DIAG_DIR, _diag_name)
     _diag_f    = open(_diag_path, "w", newline="")
     _diag_w    = csv.writer(_diag_f)
