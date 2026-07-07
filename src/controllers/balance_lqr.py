@@ -22,6 +22,7 @@ import math
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 # Expose src/ (top-level libs: config, motor_comm, camera_comm, ekf).
@@ -70,10 +71,15 @@ CTRL_HZ            = 100
 DT                 = 1.0 / CTRL_HZ
 
 # Cart velocity estimate
-# 2026-06: position is now pushed ~10ms (firmware) and read from cache (instant),
-# so poll EVERY loop and use RAW Δpos/Δt (no EMA — encoder is clean & fast; the
-# old EMA only added lag). If ẋ looks jittery in the logs, add a light α-β here.
+# 2026-07-07: velocity = Δpos over a FIXED ~40ms window, NOT between consecutive
+# distinct cache updates. The old Δpos/Δt used "when the loop noticed the value"
+# as the clock; serial/thread/loop jitter (±3-5ms on a 10ms baseline) produced
+# physically impossible spikes (measured +0.94 m/s in one tick, motor limit
+# ~0.29) which K_X_DOT amplified into ±2500 PWM garbage (testbal_ 194211-194245).
+# A 40ms baseline dilutes the same jitter to <~12% error; quantization noise is
+# 1 pulse/40ms ≈ 0.003 m/s; the estimate lags ~20ms — small vs τ=178ms.
 CART_POLL_EVERY_N  = 1        # read cached position every 100 Hz loop
+VEL_WINDOW_S       = 0.040    # velocity differencing baseline (30-50ms all fine)
 
 # ── Delay compensation (Tier-2 angle predictor) ──────────────────────
 # Vision arrives late (glass->motion). We extrapolate the state forward by the
@@ -118,8 +124,14 @@ EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
                            #   ↓ trust model more (smoother, more lag)
 EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈1.1°).
                            #   TODO: measure from a static recording, set exact.
-EKF_INPUT_GAIN  = 0.0      # b = PWM→angular-accel. 0 = ignore motor in the model
-                           #   (fine for now); calibrate later, then set here.
+EKF_INPUT_GAIN  = -0.015   # b = PWM→angular-accel (rad/s² per PWM unit) in the
+                           # EKF model ω̇ = ω₀²·sinθ + b·u·cosθ.
+                           # Calibrated 2026-07-07 by OFFLINE REPLAY of the 7
+                           # testbal_ segments: sweeping b, one-step prediction
+                           # RMS error minimized at b≈-0.015 (0.93°→0.66°).
+                           # Sign matches physics (+PWM → restoring θ̈<0).
+                           # |b| < ideal 0.054 = ω₀²/g · c/m because PWM ≠ force
+                           # (back-EMF drag + 63ms motor lag dilute it).
 
 
 def _deadband(pwm):
@@ -155,11 +167,12 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
     omega            = 0.0
     pos              = comm.get_position()
     cart_pos_m       = pos * M_PER_PULSE
-    cart_pos_m_prev  = cart_pos_m
     cart_vel_m_s     = 0.0
-    last_cart_t      = time.time()
     cart_poll_count  = 0
-    last_pos_raw     = pos        # last DISTINCT pulse count (for Δpos==0 guard)
+    # (t, pos_m) history for the fixed-window velocity estimate. Seeded with
+    # the current sample; velocity stays 0 until ~half a window of history
+    # exists (true at engage: the cart starts at rest).
+    pos_hist         = deque([(time.time(), cart_pos_m)])
 
     # --- EKF angle/rate estimator (replaces raw camera ω) ------------
     ekf        = PendulumEKF(grav_coef=GRAV_OVER_LEFF,
@@ -296,20 +309,20 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 diag_gp_n      += 1
                 cart_pos_m      = pos * M_PER_PULSE
 
-                # Raw velocity = Δpos / Δt (no smoothing). Δt is the REAL time
-                # between distinct updates (handles loop/push jitter).
-                # Δpos==0 guard: if the pushed cache hasn't refreshed since the
-                # last distinct value (firmware-push vs loop beat), the cart did
-                # NOT necessarily stop — hold the previous velocity instead of
-                # emitting a fake 0 that would spike K_x_dot.
-                if pos != last_pos_raw:
-                    t_cart = time.time()
-                    dt_c   = max(t_cart - last_cart_t, 1e-6)
-                    cart_vel_m_s    = (cart_pos_m - cart_pos_m_prev) / dt_c
-                    cart_pos_m_prev = cart_pos_m
-                    last_cart_t     = t_cart
-                    last_pos_raw    = pos
-                # else: cache unchanged this read → keep previous cart_vel_m_s
+                # Fixed-window velocity: Δpos over ~VEL_WINDOW_S, appended every
+                # loop tick (repeated cache values are fine — the baseline spans
+                # ~4 firmware pushes, so push/loop jitter dilutes to <~12%
+                # instead of the 3-4x spikes the old consecutive-update Δpos/Δt
+                # produced; see header comment at VEL_WINDOW_S).
+                t_now = time.time()
+                pos_hist.append((t_now, cart_pos_m))
+                # keep pos_hist[0] as the newest sample that is >= window old
+                while len(pos_hist) >= 2 and t_now - pos_hist[1][0] >= VEL_WINDOW_S:
+                    pos_hist.popleft()
+                t_old, pos_m_old = pos_hist[0]
+                if t_now - t_old >= VEL_WINDOW_S * 0.5:
+                    cart_vel_m_s = (cart_pos_m - pos_m_old) / (t_now - t_old)
+                # else: not enough history yet (first ~20ms) → keep previous
 
                 # ---- safety: cart boundary -------------------------
                 if abs(pos) > MAX_PULSES:
