@@ -6,17 +6,19 @@ without the variability of swing-up catches.
 
 How it works:
   1. Connect, then you put the CART at track center and press ENTER -> encoder
-     is zeroed there (so 0 = center, boundary check is symmetric).
+     is zeroed there ONCE (so 0 = center, boundary check is symmetric).
   2. The script enters an ARMED state: motor OFF, live theta/omega readout.
   3. You hold the pendulum up and steady it near 0 deg. The controller engages
      ONLY when |theta| < ENGAGE_ANGLE_DEG AND |omega| < ENGAGE_OMEGA, held
      steady for ENGAGE_HOLD_S — i.e. only once it's genuinely upright & still.
      It will NOT start while you're still moving it toward 0.
   4. On engage it prints "BALANCING — let go", runs balance_lqr_loop, and logs
-     to balance_<timestamp>.csv (same columns as swing-up, so plot_swingup.py
-     works on it).
-  5. After it falls / hits boundary, you can re-center and arm again.
-  Ctrl-C quits.
+     both CSVs to data/balance_diag/ with a "testbal_" prefix
+     (testbal_log_* = swing-up schema for plot_swingup.py,
+      testbal_diag_* = 22-col per-loop diagnostic).
+  5. After it falls / hits boundary the cart AUTO-RECENTERS to encoder 0 and
+     the next trial arms itself — just lift the pole again.
+  Ctrl-C quits (during balance: first Ctrl-C stops the trial and exits).
 
 Usage:
     python test_balance_lqr.py [PORT] [ZMQ_ADDR]
@@ -122,20 +124,21 @@ def main():
 
     trial = 0
     try:
-        while True:
-            input("\n  Put the CART at track CENTER, then press ENTER to zero & arm "
-                  "(Ctrl-C to quit)...")
-            # Blocking send() must not race the position-stream reader thread:
-            # stop the stream, home, then restart it. balance_lqr_loop polls
-            # get_position() at 100 Hz and NEEDS the cached stream — without it
-            # every call is a blocking serial round-trip and the loop rate dies
-            # (swing_up_energy_dc.py does the same home-then-stream sequence).
-            comm.stop_position_stream()
-            comm.send("h", 0, echo_timeout=0.3)   # zero encoder at center
-            comm.send_velocity(0)                 # ensure motor off
-            comm.start_position_stream()
-            cam.drain()
+        # Zero the encoder ONCE at the true track center; every later trial
+        # auto-recenters back to this 0, so no manual re-centering is needed.
+        # Home BEFORE starting the position stream: the blocking send() must
+        # not race the stream reader thread. balance_lqr_loop polls
+        # get_position() at 100 Hz and NEEDS the cached stream — without it
+        # every call is a blocking serial round-trip and the loop rate dies
+        # (swing_up_energy_dc.py does the same home-then-stream sequence).
+        input("\n  Put the CART at track CENTER, then press ENTER to zero & start "
+              "(Ctrl-C to quit)...")
+        comm.send("h", 0, echo_timeout=0.3)   # zero encoder at center
+        comm.send_velocity(0)                 # ensure motor off
+        comm.start_position_stream()
 
+        while True:
+            cam.drain()
             if not wait_until_upright(cam):
                 continue
 
@@ -162,6 +165,16 @@ def main():
             print(f"\n  Trial {trial}: ended '{result}' after {held:.2f}s  "
                   f"-> {log_path}")
             print(f"  Plot it:  python {plot_py} {log_path}")
+
+            if result == 'interrupt':
+                break                          # Ctrl-C during balance = quit
+
+            # Drive the cart back to encoder 0 (proportional PWM, config
+            # RECENTER_* constants) so the next trial starts centered without
+            # manual pushing. Same routine close() uses; stream-cache safe.
+            print("  Auto-recentering cart...")
+            comm._recenter()
+            print("  Centered. Next trial arming...")
 
     except KeyboardInterrupt:
         print("\n  Quit.")
