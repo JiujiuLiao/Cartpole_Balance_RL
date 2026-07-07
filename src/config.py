@@ -53,7 +53,7 @@ GRAVITY = 9.81                  # m/s²
 # ── Track geometry & safety margin ───────────────────
 TRACK_LENGTH_M  = 0.84                          # full physical track length
 TRACK_HALF_M    = TRACK_LENGTH_M / 2            # 0.42 m, center → end
-SAFETY_MARGIN_M = 0.1                          # never get within this of the end
+SAFETY_MARGIN_M = 0.15                          # never get within this of the end
 USABLE_HALF_M   = TRACK_HALF_M - SAFETY_MARGIN_M  # 0.37 m (controllers' boundary)
 
 
