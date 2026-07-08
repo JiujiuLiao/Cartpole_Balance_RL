@@ -43,115 +43,60 @@ except AttributeError:
     _CLOCK_BOOTTIME = None
 
 # ----------------------------------------------------------------------
-# LQR GAINS  ←  paste from compute_lqr_K.py output
+# LQR GAINS — from compute_lqr_K.py (measured model: c=0.0195, b=16.0).
+# "R2" golden config, rollback 2026-07-08. Do NOT soften K or re-"fix" the
+# 50 Hz dither without A/B data — full audit in activity_log.md 2026-07-08.
 # ----------------------------------------------------------------------
-# These are PLACEHOLDERS.  Run `python compute_lqr_K.py` on PC, then
-# copy the printed K values here.
-# LQR state-feedback gains  →  state = [theta, theta_dot, x_cart, x_cart_dot]
-# Control law: pwm = -(K_THETA*theta + K_THETA_DOT*theta_dot
-#                      + K_X*x + K_X_DOT*x_dot)   (see ~line 294)
-# Computed by compute_lqr_K.py (Riccati solution), NOT hand-tuned.
-# Larger magnitude = that state is weighted more heavily / corrected harder.
-#K_THETA      = -1752.4887   # pole angle theta [rad] — largest; primary balancer
-#K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
-#K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
-#K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-# 2026-07-08 ROLLBACK to the empirically best config ("R2", hand tests
-# 20260707_2009xx-2014xx: median 2.12s on gentle entries, best 3.51s).
-# Controlled audit (same-entry-condition comparison across 4 rounds) showed
-# every later "improvement" made survival SHORTER:
-#   R3 (EMA on EKF input, kills 50Hz chatter)      2.12s -> 1.37s
-#   R4 (soft K)                                    -> 1.21s
-#   R5 (delay-aware K + outer low-pass)            -> worse (user report)
-# Lessons kept in mind:
-#   - The 50 Hz +-255 chatter (forward-prediction u-loop, gain 1.28>1) is
-#     REAL but apparently functional — dither/sliding-mode-like smoothing of
-#     deadband+friction. Do NOT "fix" it again without A/B data.
-#   - The 2-4 Hz theta oscillation exists in R2 too (power fraction 0.81);
-#     it is NOT what kills R2. R2 dies by slow drift into the 0.29 m/s
-#     velocity ceiling -> next single-variable step is a slow zero-bias trim.
-# K from measured-model LQR (c=0.0195, b=16.0; Bryson 8deg,2,0.15m,0.2,u255):
 K_THETA      = -7912    # theta gain
 K_THETA_DOT  = -1372    # theta_dot gain
 K_X          = -1700    # cart-position gain
 K_X_DOT      = -2971    # cart-velocity gain
-# Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
-# This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
-# so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
-# way on the very first balance attempt.
-PWM_SIGN = +1
+PWM_SIGN     = +1       # verified: θ>0 = tilt right, +PWM = cart right
+
+# Zero-bias trim (integral action), added 2026-07-08. A proportional law
+# parks the pole at whatever angle generates the force that cancels camera
+# bias + friction asymmetry + dither mean (measured park: ~0.55°, 8/11 runs
+# drift right into the 0.29 m/s ceiling). The trim integrates POSITION
+# (∫x — a genuinely new signal; integrating v alone ≡ just retuning K_X)
+# and slowly steers the angle target until the cart stops drifting:
+#   theta_trim -= TRIM_KI * (x + TRIM_TV*v) * dt      (only while |θ|<4°)
+#   u uses (theta_ctrl - theta_trim)
+# Steady state: x→0, v→0, trim→total effective bias.
+TRIM_KI      = 0.025    # rad/(m·s); trim rate ≈0.2°/s at x=0.15m (slow vs fast loop)
+TRIM_TV      = 1.0      # s, velocity lookahead in the integrand (damping zero)
+TRIM_LIMIT   = 0.035    # rad ≈ 2°, clamp (max authority 277 PWM)
 
 # Control loop
 CTRL_HZ            = 100
 DT                 = 1.0 / CTRL_HZ
 
-# Cart velocity estimate
-# 2026-07-07: velocity = Δpos over a FIXED ~40ms window, NOT between consecutive
-# distinct cache updates. The old Δpos/Δt used "when the loop noticed the value"
-# as the clock; serial/thread/loop jitter (±3-5ms on a 10ms baseline) produced
-# physically impossible spikes (measured +0.94 m/s in one tick, motor limit
-# ~0.29) which K_X_DOT amplified into ±2500 PWM garbage (testbal_ 194211-194245).
-# A 40ms baseline dilutes the same jitter to <~12% error; quantization noise is
-# 1 pulse/40ms ≈ 0.003 m/s; the estimate lags ~20ms — small vs τ=178ms.
+# Cart velocity = Δpos over a FIXED 40ms window. Do not go back to
+# consecutive-update Δpos/Δt: read-time jitter on a 10ms baseline produced
+# impossible spikes (0.94 m/s → ±2500 PWM garbage via K_X_DOT).
 CART_POLL_EVERY_N  = 1        # read cached position every 100 Hz loop
-VEL_WINDOW_S       = 0.040    # velocity differencing baseline (30-50ms all fine)
+VEL_WINDOW_S       = 0.040    # differencing baseline; adds ~20ms lag (ok vs τ=178ms)
 
-# ── Delay compensation (Tier-2 angle predictor) ──────────────────────
-# Vision arrives late (glass->motion). We extrapolate the state forward by the
-# delay before feeding the LQR. The delay is NOT a constant (measured 38-58ms),
-# so it is computed PER FRAME from the camera's hardware capture timestamp:
-#
-#   T_delay_dyn = frame_age + T_ACTUATION
-#     frame_age   = now_BOOTTIME - SensorTimestamp   (MEASURED each loop via
-#                   parts[8] on CLOCK_BOOTTIME). This is glass->now: it INCLUDES
-#                   the ~20ms photon-capture latency + processing + ZMQ transport
-#                   + control-loop staleness, and all their jitter.
-#     T_ACTUATION = FIXED part STILL in the future when we predict: controller
-#                   compute + serial + motor mechanical response AFTER the command
-#                   (~17ms). Not in frame_age because it hasn't happened yet.
-#
-# CALIBRATE T_ACTUATION: run balance, watch the printed "age=..ms Tdly=..ms".
-# `age` should sit near your measured glass->now (~25-35ms, incl. the 20ms
-# capture); set T_ACTUATION (~motor response) so Tdly ~ glass->motion median (~40ms).
-#
-# GRACEFUL FALLBACK: if the camera sends no SensorTimestamp (parts[8]=0 / old
-# publisher) or the OS lacks CLOCK_BOOTTIME, frame_age stays 0 and the horizon is
-# just T_ACTUATION (a one-time warning prints) — bump T_ACTUATION in that case.
-#
-# The predictor uses the pendulum's free near-upright dynamics: θ̈ ≈ (g/l_eff)·θ.
-# Safety/giveup still uses MEASURED theta, never the prediction.
+# ── Delay compensation ────────────────────────────────────────────────
+# Vision is ~40-60ms stale; the state fed to the LQR is extrapolated by
+#   T_delay_dyn = frame_age (camera SensorTimestamp vs CLOCK_BOOTTIME, per
+#                 frame) + T_ACTUATION (serial + motor response, fixed).
+# No SensorTimestamp / no BOOTTIME → frame_age=0, warns once; raise T_ACTUATION.
+# Safety/giveup always uses MEASURED theta, never the prediction.
 PREDICT_ENABLE = True
-T_ACTUATION    = 0.017     # s, post-command serial+motor response (CALIBRATE on hw)
-T_DELAY_MIN    = 0.015     # s, clamp floor — never predict less than this
-T_DELAY_MAX    = 0.090     # s, clamp ceiling — reject a stale/garbage timestamp
-GRAV_OVER_LEFF = 31.5       # = ω₀² 实测 (单摆自由摆动, 2026-06-17, FFT 31.2 + 过零点 31.9)
-                            # 注意: 这不是 g/几何长(g/0.34=28.85, 那是点质量近似);
-                            # 你的摆有配重 → 真身 = m·g·d/I_pivot = ω₀² ≈ 31.5,
-                            # 等效 g/l_eff, l_eff≈0.31m. 旧值 28.85 偏低~9%, 已弃.
+T_ACTUATION    = 0.017     # s, calibrated: Tdly print ≈ glass->motion median 40ms
+T_DELAY_MIN    = 0.015     # s, horizon clamp floor
+T_DELAY_MAX    = 0.090     # s, horizon clamp ceiling (rejects garbage timestamps)
+GRAV_OVER_LEFF = 31.5      # ω₀² 实测 2026-06-17 = m·g·d/I_pivot（非 g/L 点质量近似）
 
-# ── EKF state estimator (clean ω; replaces camera diff+EMA) ────────────
-# Why: camera ω (1-frame diff + EMA) noise ~0.6 rad/s × K_θ̇(307) ≈ ±184 PWM of
-# PURE noise → PWM saturates from noise alone (proven in swingup_..._145909.csv).
-# The EKF infers ω from the physics, killing most of that noise term.
-USE_EKF         = True     # master switch; set False to revert to raw camera ω
-EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
-                           #   ↑ trust camera more (faster, noisier)
-                           #   ↓ trust model more (smoother, more lag)
-EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈1.1°).
-                           #   TODO: measure from a static recording, set exact.
-# NOTE (2026-07-08): feeding RAW last_pwm below closes a fast loop through
-# the delay-compensation forward() (gain |b|*K_THETA_DOT*T ~ 1.28 > 1) and
-# produces 50 Hz +-255 chatter. This is KNOWN and INTENTIONAL after the
-# rollback audit: the chatter acts as dither (R2 config, median 2.12s);
-# low-passing it (EMA, "R3") cut survival to 1.37s. Re-visit only with A/B.
-EKF_INPUT_GAIN  = -0.015   # b = PWM→angular-accel (rad/s² per PWM unit) in the
-                           # EKF model ω̇ = ω₀²·sinθ + b·u·cosθ.
-                           # Calibrated 2026-07-07 by OFFLINE REPLAY of the 7
-                           # testbal_ segments: sweeping b, one-step prediction
-                           # RMS error minimized at b≈-0.015 (0.93°→0.66°).
-                           # Sign matches physics (+PWM → restoring θ̈<0).
-                           # |b| < ideal 0.054 = ω₀²/g · c/m because PWM ≠ force
-                           # (back-EMF drag + 63ms motor lag dilute it).
+# ── EKF state estimator (clean ω instead of camera diff+EMA) ──────────
+USE_EKF         = True     # False = raw camera ω (noisy, ~0.6 rad/s)
+EKF_SIGMA_A     = 8.0      # process noise (rad/s²): ↑跟相机紧, ↓更平滑但滞后
+EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈ 1.1°)
+EKF_INPUT_GAIN  = -0.015   # b in ω̇ = ω₀²·sinθ + b·u·cosθ; calibrated by offline
+                           # replay 2026-07-07 (pred err 0.93°→0.66°).
+                           # Raw last_pwm as u causes 50Hz dither via forward()
+                           # — KNOWN & KEPT (R2 golden config, see activity_log
+                           # 2026-07-08). Don't low-pass it without A/B.
 
 
 def _deadband(pwm):
@@ -171,9 +116,8 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
       cam         : CameraSubscriber  (latest_angle -> (theta_rad, omega, pole_up))
       t0          : run start time (for log timestamps, matches swing-up clock)
       log_writer  : csv.writer — same columns as swing-up's log_writer
-      diag_prefix : filename prefix of the per-loop diagnostic CSV. Default is
-                    the swing-up path ("balance_diag"); test_balance_lqr passes
-                    "testbal_diag" so hand-test segments are distinguishable.
+      diag_prefix : per-loop diag CSV prefix ("balance_diag" = swing-up runs;
+                    test_balance_lqr passes "testbal_diag")
 
     Returns 'fall' | 'boundary' | 'interrupt'.
     """
@@ -189,10 +133,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
     cart_pos_m       = pos * M_PER_PULSE
     cart_vel_m_s     = 0.0
     cart_poll_count  = 0
-    # (t, pos_m) history for the fixed-window velocity estimate. Seeded with
-    # the current sample; velocity stays 0 until ~half a window of history
-    # exists (true at engage: the cart starts at rest).
-    pos_hist         = deque([(time.time(), cart_pos_m)])
+    pos_hist         = deque([(time.time(), cart_pos_m)])  # (t, pos_m) for VEL_WINDOW_S
 
     # --- EKF angle/rate estimator (replaces raw camera ω) ------------
     ekf        = PendulumEKF(grav_coef=GRAV_OVER_LEFF,
@@ -201,6 +142,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                              b=EKF_INPUT_GAIN)
     ekf_ready  = False     # lazily reset() to the first valid frame
     last_pwm   = 0         # last PWM sent — fed RAW to the EKF (see NOTE above)
+    theta_trim = 0.0       # zero-bias trim state (rad), see TRIM_KI header
     last_ekf_t = time.time()
     last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
     frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
@@ -223,7 +165,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
         "theta_meas_deg", "omega_meas", "theta_ekf_deg", "omega_ekf",
         "gated", "n_rejected", "theta_ctrl_deg", "omega_ctrl",
         "P_theta", "P_omega", "u_pwm", "pwm", "saturated", "in_deadband",
-        "cart_pos_m", "cart_vel_m_s",
+        "cart_pos_m", "cart_vel_m_s", "theta_trim_deg",
     ])
     _diag_rows = 0
     def _fmt(v, nd=4):        # format an optional float; blank for None/dropout
@@ -329,11 +271,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 diag_gp_n      += 1
                 cart_pos_m      = pos * M_PER_PULSE
 
-                # Fixed-window velocity: Δpos over ~VEL_WINDOW_S, appended every
-                # loop tick (repeated cache values are fine — the baseline spans
-                # ~4 firmware pushes, so push/loop jitter dilutes to <~12%
-                # instead of the 3-4x spikes the old consecutive-update Δpos/Δt
-                # produced; see header comment at VEL_WINDOW_S).
+                # Fixed-window velocity (see VEL_WINDOW_S header comment).
                 t_now = time.time()
                 pos_hist.append((t_now, cart_pos_m))
                 # keep pos_hist[0] as the newest sample that is >= window old
@@ -342,7 +280,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 t_old, pos_m_old = pos_hist[0]
                 if t_now - t_old >= VEL_WINDOW_S * 0.5:
                     cart_vel_m_s = (cart_pos_m - pos_m_old) / (t_now - t_old)
-                # else: not enough history yet (first ~20ms) → keep previous
+                # else: <20ms of history yet → keep previous value
 
                 # ---- safety: cart boundary -------------------------
                 if abs(pos) > MAX_PULSES:
@@ -363,9 +301,8 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
 
             # ---- delay compensation: predict state to "command effect" ----
             if USE_EKF and PREDICT_ENABLE:
-                # Roll the EKF state forward by the (dynamic) delay using the same
-                # nonlinear model (raw last PWM as input — see chatter NOTE at
-                # EKF_INPUT_GAIN).
+                # Roll EKF state forward by the delay (raw last_pwm as input —
+                # see EKF_INPUT_GAIN note).
                 theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=last_pwm)
             elif PREDICT_ENABLE:
                 theta_ctrl = (theta_rad + omega * t_delay_dyn
@@ -375,8 +312,14 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 theta_ctrl = theta_rad
                 omega_ctrl = omega
 
+            # ---- zero-bias trim (slow integral on cart position) ----
+            if abs(theta_deg) < 4.0:      # freeze during swing/fall transients
+                theta_trim -= TRIM_KI * (cart_pos_m
+                                         + TRIM_TV * cart_vel_m_s) * dt_ekf
+                theta_trim = max(-TRIM_LIMIT, min(TRIM_LIMIT, theta_trim))
+
             # ---- LQR (fed the delay-compensated state) -------------
-            u_pwm = -(K_THETA     * theta_ctrl
+            u_pwm = -(K_THETA     * (theta_ctrl - theta_trim)
                     + K_THETA_DOT * omega_ctrl
                     + K_X         * cart_pos_m
                     + K_X_DOT     * cart_vel_m_s)
@@ -412,6 +355,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 1 if abs(u_pwm) < PWM_DEADBAND else 0,
                 f"{cart_pos_m:.4f}",
                 f"{cart_vel_m_s:.4f}",
+                f"{math.degrees(theta_trim):.3f}",
             ])
             _diag_rows += 1
 
