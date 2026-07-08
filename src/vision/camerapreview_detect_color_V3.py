@@ -58,7 +58,7 @@ LENS_POSITION = 4.5              # tune to pendulum distance
 # gate below is the second line of defense.
 HSV_YELLOW_LOW = np.array([18, 130, 90], dtype=np.uint8)
 HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
-HSV_BLUE_LOW = np.array([100, 150, 80], dtype=np.uint8)
+HSV_BLUE_LOW = np.array([100, 150, 130], dtype=np.uint8)
 HSV_BLUE_HIGH = np.array([130, 255, 255], dtype=np.uint8)
 
 # Bumped from 25 to 500 to reject small background false positives.
