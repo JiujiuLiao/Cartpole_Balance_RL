@@ -56,29 +56,25 @@ except AttributeError:
 #K_THETA_DOT  = -306.8017    # pole rate theta_dot [rad/s] — damping, kills overshoot
 #K_X          = -3.1623      # cart position x [m] — smallest; gently recenters cart
 #K_X_DOT      = -25.3450     # cart velocity x_dot [m/s] — damps cart motion
-# 2026-07-07 (evening): DELAY-AWARE gain set + outer-loop low-pass.
-# History of this day's iterations (all hand-test verified, see activity log):
-#   hot  [-7912,-1372,-1700,-2971] and soft [-5281,-925,-800,-2103] both hit a
-#   GROWING ~2.6-3.1 Hz oscillation. Frequency-domain analysis of the full
-#   chain (plant + 45ms camera + EKF + 62ms forward + 27ms actuation + 40ms
-#   v-window), calibrated against 4 rounds of hardware data, showed why:
-#   theta-loop natural freq sqrt(|B2|*K_THETA - w0^2) must stay inside the
-#   delay-tolerable window (~8 rad/s, like the OLD -1780 gains, which never
-#   oscillated at x1.0); the new hot/soft sets put it at 16-21 rad/s where the
-#   ~72ms total delay flips damping negative. The outer loop (K_X_DOT) also
-#   pumps the 2.5 Hz mode unless band-limited — hence OUTER_LP_W below.
-# Model worst closed-loop root: -0.11 (reference: old K, which hardware shows
-# as non-oscillating, maps to +1.44 in the same model -> real margin larger).
-K_THETA      = -1780    # theta gain        (old, delay-compatible scale)
-K_THETA_DOT  = -284     # theta_dot gain    (old, delay-compatible scale)
-K_X          = -200     # cart-position gain  (anti-drift, band-limited)
-K_X_DOT      = -2103    # cart-velocity gain  (anti-drift, band-limited)
-
-# First-order low-pass on the OUTER-loop term (K_X*x + K_X_DOT*v). The outer
-# loop only needs to act on the seconds-scale drift; at 2.5 Hz its lagged
-# feedback destabilizes the pole mode (measured rounds 3-4). 10 rad/s corner
-# keeps drift control intact and removes its gain where it hurts.
-OUTER_LP_W   = 10.0     # rad/s (~1.6 Hz corner)
+# 2026-07-08 ROLLBACK to the empirically best config ("R2", hand tests
+# 20260707_2009xx-2014xx: median 2.12s on gentle entries, best 3.51s).
+# Controlled audit (same-entry-condition comparison across 4 rounds) showed
+# every later "improvement" made survival SHORTER:
+#   R3 (EMA on EKF input, kills 50Hz chatter)      2.12s -> 1.37s
+#   R4 (soft K)                                    -> 1.21s
+#   R5 (delay-aware K + outer low-pass)            -> worse (user report)
+# Lessons kept in mind:
+#   - The 50 Hz +-255 chatter (forward-prediction u-loop, gain 1.28>1) is
+#     REAL but apparently functional — dither/sliding-mode-like smoothing of
+#     deadband+friction. Do NOT "fix" it again without A/B data.
+#   - The 2-4 Hz theta oscillation exists in R2 too (power fraction 0.81);
+#     it is NOT what kills R2. R2 dies by slow drift into the 0.29 m/s
+#     velocity ceiling -> next single-variable step is a slow zero-bias trim.
+# K from measured-model LQR (c=0.0195, b=16.0; Bryson 8deg,2,0.15m,0.2,u255):
+K_THETA      = -7912    # theta gain
+K_THETA_DOT  = -1372    # theta_dot gain
+K_X          = -1700    # cart-position gain
+K_X_DOT      = -2971    # cart-velocity gain
 # Hardware sign tweak: the model assumes θ>0 = tilt right, +PWM = cart right.
 # This matches the PD controller (which uses ANGLE_SIGN=-1 in its formula),
 # so leave PWM_SIGN=+1 here. Flip to -1 only if the cart pushes the wrong
@@ -143,16 +139,11 @@ EKF_SIGMA_A     = 8.0      # process noise: unknown angular-accel std (rad/s²)
                            #   ↓ trust model more (smoother, more lag)
 EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈1.1°).
                            #   TODO: measure from a static recording, set exact.
-EKF_U_TAU_S     = 0.060    # EMA time constant for the PWM fed to the EKF.
-                           # NEVER feed raw last_pwm with b≠0: the delay-
-                           # compensation forward(T≈62ms, u) makes this cycle's
-                           # command depend on last cycle's with loop gain
-                           # |b|·K_THETA_DOT·T = 0.015·1372·0.062 ≈ 1.28 > 1 →
-                           # 50 Hz ±255 chatter (measured testbal_ 201405:
-                           # corr(pwm, ω_ctrl−ω_ekf)=+0.93, 95 sign flips/100
-                           # ticks). A 60ms EMA attenuates the alternating
-                           # component ~20x (loop gain →0.07) while sustained
-                           # pushes still get compensated.
+# NOTE (2026-07-08): feeding RAW last_pwm below closes a fast loop through
+# the delay-compensation forward() (gain |b|*K_THETA_DOT*T ~ 1.28 > 1) and
+# produces 50 Hz +-255 chatter. This is KNOWN and INTENTIONAL after the
+# rollback audit: the chatter acts as dither (R2 config, median 2.12s);
+# low-passing it (EMA, "R3") cut survival to 1.37s. Re-visit only with A/B.
 EKF_INPUT_GAIN  = -0.015   # b = PWM→angular-accel (rad/s² per PWM unit) in the
                            # EKF model ω̇ = ω₀²·sinθ + b·u·cosθ.
                            # Calibrated 2026-07-07 by OFFLINE REPLAY of the 7
@@ -209,10 +200,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                              sigma_theta=EKF_SIGMA_THETA,
                              b=EKF_INPUT_GAIN)
     ekf_ready  = False     # lazily reset() to the first valid frame
-    last_pwm   = 0         # last PWM sent
-    u_ema      = 0.0       # low-passed PWM — what the EKF sees as input u
-                           # (see EKF_U_TAU_S: raw last_pwm self-oscillates)
-    outer_f    = 0.0       # low-passed outer-loop term (see OUTER_LP_W)
+    last_pwm   = 0         # last PWM sent — fed RAW to the EKF (see NOTE above)
     last_ekf_t = time.time()
     last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
     frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
@@ -314,8 +302,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                     ekf.reset(theta_meas, omega_meas)
                     ekf_ready = True
                 else:
-                    u_ema += (last_pwm - u_ema) * min(1.0, dt_ekf / EKF_U_TAU_S)
-                    ekf.predict(dt_ekf, u=u_ema)         # roll model fwd by real dt
+                    ekf.predict(dt_ekf, u=last_pwm)      # roll model fwd by real dt
                     if theta_meas is not None:
                         gated = not ekf.update(theta_meas)  # fuse; True→frame rejected by gate
                 theta_rad, omega = ekf.state()
@@ -377,9 +364,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
             # ---- delay compensation: predict state to "command effect" ----
             if USE_EKF and PREDICT_ENABLE:
                 # Roll the EKF state forward by the (dynamic) delay using the same
-                # nonlinear model. Input = LOW-PASSED pwm, not last_pwm — raw
-                # last_pwm here closes an unstable algebraic loop (EKF_U_TAU_S).
-                theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=u_ema)
+                # nonlinear model (raw last PWM as input — see chatter NOTE at
+                # EKF_INPUT_GAIN).
+                theta_ctrl, omega_ctrl = ekf.forward(t_delay_dyn, u=last_pwm)
             elif PREDICT_ENABLE:
                 theta_ctrl = (theta_rad + omega * t_delay_dyn
                               + 0.5 * GRAV_OVER_LEFF * theta_rad * t_delay_dyn**2)
@@ -389,13 +376,10 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 omega_ctrl = omega
 
             # ---- LQR (fed the delay-compensated state) -------------
-            # Outer term goes through a first-order low-pass: drift control
-            # needs no bandwidth at 2.5 Hz, where its lag destabilizes the
-            # pole mode (OUTER_LP_W header comment).
-            outer_raw = -(K_X * cart_pos_m + K_X_DOT * cart_vel_m_s)
-            outer_f  += (outer_raw - outer_f) * min(1.0, dt_ekf * OUTER_LP_W)
             u_pwm = -(K_THETA     * theta_ctrl
-                    + K_THETA_DOT * omega_ctrl) + outer_f
+                    + K_THETA_DOT * omega_ctrl
+                    + K_X         * cart_pos_m
+                    + K_X_DOT     * cart_vel_m_s)
             pwm = int(max(-PWM_LIMIT, min(PWM_LIMIT, _deadband(PWM_SIGN * u_pwm))))
 
             comm.send_velocity(pwm)
