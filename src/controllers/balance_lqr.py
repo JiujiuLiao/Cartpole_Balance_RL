@@ -53,18 +53,20 @@ K_X          = -1700    # cart-position gain
 K_X_DOT      = -2971    # cart-velocity gain
 PWM_SIGN     = +1       # verified: θ>0 = tilt right, +PWM = cart right
 
-# Zero-bias trim (integral action), added 2026-07-08. A proportional law
-# parks the pole at whatever angle generates the force that cancels camera
-# bias + friction asymmetry + dither mean (measured park: ~0.55°, 8/11 runs
-# drift right into the 0.29 m/s ceiling). The trim integrates POSITION
-# (∫x — a genuinely new signal; integrating v alone ≡ just retuning K_X)
-# and slowly steers the angle target until the cart stops drifting:
-#   theta_trim -= TRIM_KI * (x + TRIM_TV*v) * dt      (only while |θ|<4°)
-#   u uses (theta_ctrl - theta_trim)
-# Steady state: x→0, v→0, trim→total effective bias.
-TRIM_KI      = 0.025    # rad/(m·s); trim rate ≈0.2°/s at x=0.15m (slow vs fast loop)
-TRIM_TV      = 1.0      # s, velocity lookahead in the integrand (damping zero)
-TRIM_LIMIT   = 0.035    # rad ≈ 2°, clamp (max authority 277 PWM)
+# Zero-bias trim v2 (2026-07-09): adapts BETWEEN runs, frozen within a run.
+# Purpose: a proportional law parks the pole at whatever angle cancels the
+# total bias (camera + friction asymmetry + dither mean) and the cart drifts
+# into the 0.29 m/s ceiling. The trim moves the angle target to the true
+# no-drift point.
+# v1 (in-run integral) FAILED on hardware: with 60-90% PWM saturation the
+# outer loop loses the damping an extra in-loop integrator state needs
+# (s^2 Routh term ~ 0) -> slow unstable spiral; drift flipped direction and
+# railed left 12/13 (testbal_20260709_16xx). Between-run stepping has no
+# in-loop dynamics: contraction map, converges in ~4 runs.
+TRIM_ADAPT    = 0.03     # rad per (m/s) of a run's mean drift velocity
+TRIM_STEP_MAX = 0.004    # rad (~0.23 deg) max trim change per run
+TRIM_LIMIT    = 0.035    # rad ~ 2 deg total clamp (authority <= 277 PWM)
+_trim_persist = 0.0      # session state; resets on process restart
 
 # Control loop
 CTRL_HZ            = 100
@@ -142,7 +144,9 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                              b=EKF_INPUT_GAIN)
     ekf_ready  = False     # lazily reset() to the first valid frame
     last_pwm   = 0         # last PWM sent — fed RAW to the EKF (see NOTE above)
-    theta_trim = 0.0       # zero-bias trim state (rad), see TRIM_KI header
+    global _trim_persist
+    theta_trim = _trim_persist   # frozen for this run; stepped at run end
+    drift_v_sum, drift_n = 0.0, 0
     last_ekf_t = time.time()
     last_sensor_ts_ns = None   # newest camera SensorTimestamp (ns, CLOCK_BOOTTIME)
     frame_age   = 0.0          # now_BOOTTIME - last_sensor_ts_ns; grows on dropouts
@@ -312,11 +316,10 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                 theta_ctrl = theta_rad
                 omega_ctrl = omega
 
-            # ---- zero-bias trim (slow integral on cart position) ----
-            if abs(theta_deg) < 4.0:      # freeze during swing/fall transients
-                theta_trim -= TRIM_KI * (cart_pos_m
-                                         + TRIM_TV * cart_vel_m_s) * dt_ekf
-                theta_trim = max(-TRIM_LIMIT, min(TRIM_LIMIT, theta_trim))
+            # ---- collect drift evidence for the between-run trim step ----
+            if abs(theta_deg) < 4.0:
+                drift_v_sum += cart_vel_m_s
+                drift_n     += 1
 
             # ---- LQR (fed the delay-compensated state) -------------
             u_pwm = -(K_THETA     * (theta_ctrl - theta_trim)
@@ -374,6 +377,15 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
         print("\n  [LQR] interrupted")
         return 'interrupt'
     finally:
+        # Between-run trim step: nudge the angle target against this run's
+        # mean drift (>=0.5s of near-upright evidence required).
+        if drift_n >= 50:
+            step = -TRIM_ADAPT * (drift_v_sum / drift_n)
+            step = max(-TRIM_STEP_MAX, min(TRIM_STEP_MAX, step))
+            _trim_persist = max(-TRIM_LIMIT, min(TRIM_LIMIT, theta_trim + step))
+            print(f"  [LQR] trim {math.degrees(theta_trim):+.2f} -> "
+                  f"{math.degrees(_trim_persist):+.2f} deg "
+                  f"(mean drift v={drift_v_sum/drift_n:+.3f} m/s)")
         # runs on every exit (fall / boundary / interrupt / exception) so the
         # diagnostic CSV is always flushed and closed.
         try:
