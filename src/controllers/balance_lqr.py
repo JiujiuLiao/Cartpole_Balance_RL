@@ -99,7 +99,7 @@ GRAV_OVER_LEFF = 31.5      # ω₀² 实测 2026-06-17 = m·g·d/I_pivot（非 g
 USE_EKF         = True     # False = raw camera ω (noisy, ~0.6 rad/s)
 EKF_SIGMA_A     = 8.0      # process noise (rad/s²): ↑跟相机紧, ↓更平滑但滞后
 EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈ 1.1°)
-EKF_INPUT_GAIN  = -0.032   # b in ω̇ = ω₀²·sinθ + b·u·cosθ.
+EKF_INPUT_GAIN  = -0.015   # b in ω̇ = ω₀²·sinθ + b·u·cosθ.
                            # 2026-07-22: rescaled for 80T by the c ratio
                            # (0.04221/0.0195 = 2.16x on the 40T replay value
                            # -0.015). TODO: refine by offline replay once the
