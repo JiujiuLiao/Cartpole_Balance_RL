@@ -23,11 +23,13 @@ import os
 # GT2 synchronous belt + 40-tooth pulley directly on motor output shaft.
 # WHEEL_DIAMETER_M is the pulley pitch diameter (= 40 × 2mm / π = 25.46mm);
 # the "wheel" naming is legacy and just means "drive geometry".
-PULSES_PER_REV   = 700          # measured 2026-05-27 (new motor + GT2 40T)
-WHEEL_DIAMETER_M = 0.02546      # GT2 40T pulley pitch diameter
+PULSES_PER_REV   = 700          # measured 2026-05-27 (encoder per OUTPUT-shaft rev, pulley-independent)
+WHEEL_DIAMETER_M = 0.05093      # GT2 80T pulley pitch diameter (2026-07-22 upgrade,
+                                # 80 teeth x 2mm / pi; was 40T = 0.02546. Motivation:
+                                # reflected rotor inertia /4 -> cart accel ~4->7 m/s²,
+                                # v_max ~0.29->0.58. See activity_log 2026-07-15/16.)
 M_PER_PULSE      = math.pi * WHEEL_DIAMETER_M / PULSES_PER_REV
-# M_PER_PULSE ≈ 0.1143 mm/pulse — cross-validated against
-# pwm_range_20260527_150747.csv (speed/pps = 0.0001143 across all PWMs).
+# M_PER_PULSE ≈ 0.2286 mm/pulse with 80T (exactly 2x the 40T value 0.1143).
 
 # ── Pendulum geometry & masses ───────────────────────
 PENDULUM_L_M     = 0.40         # rod length pivot → far end (m)
@@ -44,8 +46,8 @@ PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
                            + PENDULUM_TIP_MASS_KG)   # = 0.129 kg (derived)
 
 # ── Motor force calibration (used by LQR / RL) ───────
-# F_eff(PWM=255) ≈ 3.429 N (measured) → 3.429 / 255 = 0.01345 N per PWM unit.
-FORCE_PER_PWM = 0.01345
+# Effective value seen by the cart (includes reflected rotor inertia).
+FORCE_PER_PWM = 0.02083     # N/PWM, pwm_step_ident 2026-07-06
 
 # ── World ────────────────────────────────────────────
 GRAVITY = 9.81                  # m/s²
@@ -70,7 +72,9 @@ def distance_for_pulses(pulses: int) -> float:
 
 # Derived AFTER helpers are defined.
 #MAX_PULSES = pulses_for_distance(USABLE_HALF_M)
-MAX_PULSES = 2624 #3238 (USABLE_HALF_M=0.37 m at M_PER_PULSE=0.1143 mm).
+MAX_PULSES = 1312   # 80T update 2026-07-22: same 0.30 m physical boundary as before,
+                    # but M_PER_PULSE doubled -> pulse count HALVED (was 2624 @ 40T).
+                    # ⚠️ Any script with hardcoded pulse distances must be re-checked.
 
 
 # ════════════════════════════════════════════════════════════════════════

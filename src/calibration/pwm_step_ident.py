@@ -60,11 +60,11 @@ from config import (
 # Parameters
 # ----------------------------------------------------------------------
 PWM_LEVELS       = [40, 60, 90, 120, 160, 200, 255]   # tested in BOTH directions
-RUNWAY_PULSES    = 2300               # start each run this far from center.
-                                      # MUST stay well below SAFE_STOP_PULSES:
-                                      # 2500 + drive_to overshoot crossed it and
-                                      # killed every reverse run at sample #1
-                                      # (motor_ident_20260707_153518).
+RUNWAY_PULSES    = 1100               # 80T update (2026-07-22): pulses are worth 2x
+                                      # distance now; 1100 = 0.25 m runway.
+                                      # MUST stay >=100 pulses below SAFE_STOP_PULSES
+                                      # (drive_to overshoot killed reverse runs once,
+                                      # motor_ident_20260707_153518).
 SAFE_STOP_PULSES = MAX_PULSES - 100
 SAMPLE_INT_S     = 0.005              # 200 Hz
 

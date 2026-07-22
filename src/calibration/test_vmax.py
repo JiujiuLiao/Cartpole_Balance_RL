@@ -58,7 +58,9 @@ PORT             = (sys.argv[1]
 TEST_PWM         = 255                # absolute PWM used for both directions
 RUN_TIME_S       = 1.5                # max sample time per run
 SAMPLE_INT_S     = 0.005              # 200 Hz sampling
-RUNWAY_PULSES    = 2500               # start each run this far from center
+RUNWAY_PULSES    = 1100               # start each run this far from center
+                                      # (80T update 2026-07-22: pulses worth 2x
+                                      # distance; 1100 = 0.25 m. Was 2500 @ 40T.)
                                       # (~28 cm), leaves ~6 cm safety margin
                                       # before the +-MAX_PULSES boundary
 SAFE_STOP_PULSES = MAX_PULSES - 100   # emergency stop if we get this close to wall
