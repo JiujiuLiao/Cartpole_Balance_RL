@@ -47,7 +47,8 @@ PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
 
 # ── Motor force calibration (used by LQR / RL) ───────
 # Effective value seen by the cart (includes reflected rotor inertia).
-FORCE_PER_PWM = 0.02083     # N/PWM, pwm_step_ident 2026-07-06
+FORCE_PER_PWM = 0.04221     # N/PWM, pwm_step_ident 2026-07-22 (80T pulley;
+                            # fwd 0.04080 / rev 0.04363. Was 0.02083 @ 40T.)
 
 # ── World ────────────────────────────────────────────
 GRAVITY = 9.81                  # m/s²

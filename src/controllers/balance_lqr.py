@@ -47,10 +47,14 @@ except AttributeError:
 # "R2" golden config, rollback 2026-07-08. Do NOT soften K or re-"fix" the
 # 50 Hz dither without A/B data — full audit in activity_log.md 2026-07-08.
 # ----------------------------------------------------------------------
-K_THETA      = -7912    # theta gain
-K_THETA_DOT  = -1372    # theta_dot gain
+# 2026-07-22: re-solved for the 80T drivetrain (ident: c=0.04221, b=16.29;
+# same Q/R as the R2 golden config — Bryson 8deg/2rad/s/0.15m/0.20m/s, u=255.
+# Pipeline sanity: same Q/R on the old plant reproduces R2's K within 2%).
+# Closed-loop eigs [-53, -7.8, -3.8, -1.3] — slow mode finally well-damped.
+K_THETA      = -6753    # theta gain
+K_THETA_DOT  = -1163    # theta_dot gain
 K_X          = -1700    # cart-position gain
-K_X_DOT      = -2971    # cart-velocity gain
+K_X_DOT      = -2391    # cart-velocity gain
 PWM_SIGN     = +1       # verified: θ>0 = tilt right, +PWM = cart right
 
 # Zero-bias trim v2 (2026-07-09): adapts BETWEEN runs, frozen within a run.
@@ -94,10 +98,13 @@ GRAV_OVER_LEFF = 31.5      # ω₀² 实测 2026-06-17 = m·g·d/I_pivot（非 g
 USE_EKF         = True     # False = raw camera ω (noisy, ~0.6 rad/s)
 EKF_SIGMA_A     = 8.0      # process noise (rad/s²): ↑跟相机紧, ↓更平滑但滞后
 EKF_SIGMA_THETA = 0.02     # camera angle-noise std (rad ≈ 1.1°)
-EKF_INPUT_GAIN  = -0.015   # b in ω̇ = ω₀²·sinθ + b·u·cosθ; calibrated by offline
-                           # replay 2026-07-07 (pred err 0.93°→0.66°).
+EKF_INPUT_GAIN  = -0.032   # b in ω̇ = ω₀²·sinθ + b·u·cosθ.
+                           # 2026-07-22: rescaled for 80T by the c ratio
+                           # (0.04221/0.0195 = 2.16x on the 40T replay value
+                           # -0.015). TODO: refine by offline replay once the
+                           # first 80T testbal_ data exists.
                            # Raw last_pwm as u causes 50Hz dither via forward()
-                           # — KNOWN & KEPT (R2 golden config, see activity_log
+                           # — KNOWN & KEPT (R2 golden config, activity_log
                            # 2026-07-08). Don't low-pass it without A/B.
 
 
