@@ -47,14 +47,15 @@ except AttributeError:
 # "R2" golden config, rollback 2026-07-08. Do NOT soften K or re-"fix" the
 # 50 Hz dither without A/B data — full audit in activity_log.md 2026-07-08.
 # ----------------------------------------------------------------------
-# 2026-07-22: re-solved for the 80T drivetrain (ident: c=0.04221, b=16.29;
-# same Q/R as the R2 golden config — Bryson 8deg/2rad/s/0.15m/0.20m/s, u=255.
-# Pipeline sanity: same Q/R on the old plant reproduces R2's K within 2%).
-# Closed-loop eigs [-53, -7.8, -3.8, -1.3] — slow mode finally well-damped.
-K_THETA      = -6753    # theta gain
-K_THETA_DOT  = -1163    # theta_dot gain
-K_X          = -1700    # cart-position gain
-K_X_DOT      = -2391    # cart-velocity gain
+# 2026-07-22 v2: R2 golden K transplanted to 80T by the c-ratio
+# (0.0195/0.04221 = 0.462) -> linear loop identical to R2, but with 2x
+# saturation/v_max/deadband margins. The re-solved -6753 set ran the loop
+# 1.8x hotter than R2 -> 2.3Hz growing oscillation, 14/14 died <1.5s
+# (testbal_20260722_1517xx). User-approved change.
+K_THETA      = -3656    # = R2 -7912 x 0.462
+K_THETA_DOT  = -634     # = R2 -1372 x 0.462
+K_X          = -785     # = R2 -1700 x 0.462
+K_X_DOT      = -1373    # = R2 -2971 x 0.462
 PWM_SIGN     = +1       # verified: θ>0 = tilt right, +PWM = cart right
 
 # Zero-bias trim v2 (2026-07-09): adapts BETWEEN runs, frozen within a run.
