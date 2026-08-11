@@ -11,7 +11,7 @@ Measured parameters (2026-04-09):
     HALF_PERIOD   = 0.550 s   (measured via camera)
     omega0        = 5.71 rad/s
     DAMPING       = 0.0354
-    Cart max speed = 0.231 m/s  @ PWM 200  (measured 2026-05-27, new motor + GT2 40T)
+    Cart max speed = 0.231 m/s  @ PWM 200  (measured 2026-05-27, new motor + GT2 80T)
                     ≈0.30  m/s  @ PWM 255  (extrapolated, untested for safety)
     Cart max accel = TBD                   (Phase 3 force-curve fit pending)
 
@@ -45,7 +45,7 @@ RETURN_PWM     = 100          # PWM used to return cart to center
 
 # ── Safety ───────────────────────────────────────
 MAX_PULSES     = 1500         # resonance swing-up keeps cart in a tight band
-                              # (~17 cm with M_PER_PULSE=0.1143mm). Intentionally
+                              # (~34 cm with M_PER_PULSE=0.2286mm). Intentionally
                               # smaller than config.MAX_PULSES (algorithm-specific).
 
 
