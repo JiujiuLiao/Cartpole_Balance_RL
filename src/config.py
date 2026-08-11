@@ -20,45 +20,35 @@ import os
 # ════════════════════════════════════════════════════════════════════════
 
 # ── Encoder & drivetrain ─────────────────────────────
-# GT2 synchronous belt + 40-tooth pulley directly on motor output shaft.
-# WHEEL_DIAMETER_M is the pulley pitch diameter (= 40 × 2mm / π = 25.46mm);
-# the "wheel" naming is legacy and just means "drive geometry".
-PULSES_PER_REV   = 700          # measured 2026-05-27 (encoder per OUTPUT-shaft rev, pulley-independent)
-WHEEL_DIAMETER_M = 0.05093      # GT2 80T pulley pitch diameter (2026-07-22 upgrade,
-                                # 80 teeth x 2mm / pi; was 40T = 0.02546. Motivation:
-                                # reflected rotor inertia /4 -> cart accel ~4->7 m/s²,
-                                # v_max ~0.29->0.58. See activity_log 2026-07-15/16.)
+PULLEY_TEETH      = 80          # GT2 pulley tooth count (upgraded 2026-07-22)
+BELT_PITCH_M      = 0.002       # GT2 tooth pitch = 2 mm
+PULSES_PER_REV    = 700         # measured 2026-05-27 (encoder per OUTPUT-shaft rev, pulley-independent)
+WHEEL_DIAMETER_M  = PULLEY_TEETH * BELT_PITCH_M / math.pi
 M_PER_PULSE      = math.pi * WHEEL_DIAMETER_M / PULSES_PER_REV
-# M_PER_PULSE ≈ 0.2286 mm/pulse with 80T (exactly 2x the 40T value 0.1143).
 
-# ── Pendulum geometry & masses ───────────────────────
-PENDULUM_L_M     = 0.40         # rod length pivot → far end (m)
-CART_MASS_KG     = 1.014        # cart + motor + holder + wheels (no pole)
-
-# Pendulum mass distribution (measured 2026-06-10). NON-uniform: mass lumps
-# at the two ends. compute_lqr_K.py uses these to build I_cm exactly;
-# swing-up and balance_pd only need the total below (point-mass approx).
-PENDULUM_ROD_MASS_KG    = 0.10     # uniform rod
-PENDULUM_PIVOT_MASS_KG  = 0.053     # connector lump at pivot (r = 0)
-PENDULUM_TIP_MASS_KG    = 0.0     # weight at far end       (r = PENDULUM_L_M)
-PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
-                           + PENDULUM_PIVOT_MASS_KG
-                           + PENDULUM_TIP_MASS_KG)   # = 0.129 kg (derived)
-
-# ── Motor force calibration (used by LQR / RL) ───────
-# Effective value seen by the cart (includes reflected rotor inertia).
-FORCE_PER_PWM = 0.04221     # N/PWM, pwm_step_ident 2026-07-22 (80T pulley;
-                            # fwd 0.04080 / rev 0.04363. Was 0.02083 @ 40T.)
-
-# ── World ────────────────────────────────────────────
 GRAVITY = 9.81                  # m/s²
-
 # ── Track geometry & safety margin ───────────────────
-TRACK_LENGTH_M  = 0.84                          # full physical track length
+TRACK_LENGTH_M  = 0.52                          # full physical track length
 TRACK_HALF_M    = TRACK_LENGTH_M / 2            # 0.42 m, center → end
 SAFETY_MARGIN_M = 0.02                          # never get within this of the end
 USABLE_HALF_M   = TRACK_HALF_M - SAFETY_MARGIN_M  # 0.37 m (controllers' boundary)
 
+
+# ── Pendulum geometry & masses ───────────────────────
+PENDULUM_L_M     = 0.385         # rod length pivot → far end (m)
+CART_MASS_KG     = 1.014        # cart + motor + holder + wheels (no pole)
+
+# Pendulum mass distribution
+PENDULUM_ROD_MASS_KG    = 0.100     # uniform rod
+PENDULUM_PIVOT_MASS_KG  = 0.057     # connector lump at pivot (r = 0)
+PENDULUM_TIP_MASS_KG    = 0.0     # weight at far end       (r = PENDULUM_L_M)
+PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
+                           + PENDULUM_PIVOT_MASS_KG
+                           + PENDULUM_TIP_MASS_KG)   # = 0.157 kg (derived)
+
+# ── Motor force calibration (used by LQR / RL) ───────
+FORCE_PER_PWM = 0.04221     # N/PWM, pwm_force_calibration 2026-07-22 (80T pulley;
+                            # fwd 0.04080 / rev 0.04363. Was 0.02083 @ 40T.)
 
 # ── Conversion helpers ───────────────────────────────
 def pulses_for_distance(meters: float) -> int:
