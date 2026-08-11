@@ -23,7 +23,7 @@ volatile long encoderPos = 0;
 // ESP32-side self-timed sampling: micros() + own encoder into RAM, no serial
 // in the timing loop, so Pi<->ESP32 latency does NOT affect the measurement.
 const unsigned int  ACCEL_SAMPLE_US  = 1000;   // 1 ms sampling grid
-const long          ACCEL_MAX_PULSES = 3000;   // auto-brake distance (~24.5 cm, = BOUNDARY)
+const long          ACCEL_MAX_PULSES = 962;    // auto-brake at ~22 cm for current 80T setup
 const unsigned long ACCEL_MAX_MS     = 700;    // time backstop
 const int           ACCEL_MAX_SAMPLES = 800;   // 800*(4+4) = 6.4 KB
 unsigned long accel_t[ACCEL_MAX_SAMPLES];      // microseconds since step

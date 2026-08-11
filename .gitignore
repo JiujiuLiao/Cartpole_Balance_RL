@@ -31,3 +31,6 @@ pendulum_*.csv
 build/
 PROJECT_TODO.html
 Inverted_Pendulum_TODO.md
+.githubcommit-message.instructions.md
+.vscodesettings.json
+.gitignore

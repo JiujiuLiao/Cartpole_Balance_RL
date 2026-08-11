@@ -70,8 +70,8 @@ PWM_LEVELS       = [40, 60, 90, 120, 160, 200, 255]   # tested in BOTH direction
 # Distances below are measured from the track center to the start/stop point.
 # The actual pulse limits are derived from config.M_PER_PULSE so they stay
 # correct when the pulley or encoder conversion changes.
-RUNWAY_HALF_DISTANCE_CM = 25.0  # one-sided start/stop distance from center
-SAFE_STOP_DISTANCE_CM   = 27.7  # one-sided emergency limit from center
+RUNWAY_HALF_DISTANCE_CM = 18.0  # one-sided start/stop distance from center
+SAFE_STOP_DISTANCE_CM   = 22.0  # one-sided emergency limit; track is 52 cm long
 
 RUNWAY_PULSES    = pulses_for_distance(RUNWAY_HALF_DISTANCE_CM / 100.0)
 SAFE_STOP_PULSES = pulses_for_distance(SAFE_STOP_DISTANCE_CM / 100.0)

@@ -55,7 +55,7 @@ RETURN_PWM_FLOOR  = 80    # PWM 0–255 — minimum return PWM near origin; must
 # ── Safety ────────────────────────────────────────
 # Keep this limit in physical units. The old hard-coded 3000-pulse value was
 # based on the 40T pulley and is too far out for the current 80T setup.
-BOUNDARY_DISTANCE_CM = 27.7  # center-to-limit; matches the configured safe stop
+BOUNDARY_DISTANCE_CM = 22.0  # center-to-limit; leaves margin on the 52 cm track
 BOUNDARY = pulses_for_distance(BOUNDARY_DISTANCE_CM / 100.0)
 if BOUNDARY >= MAX_PULSES:
     raise ValueError(

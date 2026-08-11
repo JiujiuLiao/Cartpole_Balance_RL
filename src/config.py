@@ -29,9 +29,9 @@ M_PER_PULSE      = math.pi * WHEEL_DIAMETER_M / PULSES_PER_REV
 GRAVITY = 9.81                  # m/s²
 # ── Track geometry & safety margin ───────────────────
 TRACK_LENGTH_M  = 0.52                          # full physical track length
-TRACK_HALF_M    = TRACK_LENGTH_M / 2            # 0.42 m, center → end
+TRACK_HALF_M    = TRACK_LENGTH_M / 2            # 0.26 m, center → end
 SAFETY_MARGIN_M = 0.02                          # never get within this of the end
-USABLE_HALF_M   = TRACK_HALF_M - SAFETY_MARGIN_M  # 0.37 m (controllers' boundary)
+USABLE_HALF_M   = TRACK_HALF_M - SAFETY_MARGIN_M  # 0.24 m (controllers' boundary)
 
 
 # ── Pendulum geometry & masses ───────────────────────
@@ -47,7 +47,7 @@ PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
                            + PENDULUM_TIP_MASS_KG)   # = 0.157 kg (derived)
 
 # ── Motor force calibration (used by LQR / RL) ───────
-FORCE_PER_PWM = 0.04221        # N/PWM, provisional nominal value from three
+FORCE_PER_PWM = 0.04        # N/PWM, provisional nominal value from three
                             # 80T tests on 2026-08-11; measured c range
                             # approximately 0.0389-0.0443 N/PWM.
 
@@ -62,11 +62,9 @@ def distance_for_pulses(pulses: int) -> float:
     return pulses * M_PER_PULSE
 
 
-# Derived AFTER helpers are defined.
-#MAX_PULSES = pulses_for_distance(USABLE_HALF_M)
-MAX_PULSES = 1312   # 80T update 2026-07-22: same 0.30 m physical boundary as before,
-                    # but M_PER_PULSE doubled -> pulse count HALVED (was 2624 @ 40T).
-                    # ⚠️ Any script with hardcoded pulse distances must be re-checked.
+# Derived AFTER helpers are defined.  The 52 cm track gives 26 cm from
+# encoder center to a mechanical end; keep 2 cm margin for all controllers.
+MAX_PULSES = pulses_for_distance(USABLE_HALF_M)  # 0.24 m -> 1050 pulses @ 80T
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -77,9 +75,9 @@ PWM_LIMIT        = 255          # IBT-2 absolute max — DO NOT exceed.
                                 # (A softer ceiling of ~200 keeps cart speed
                                 # ≈ 0.23 m/s and gives more control margin;
                                 # tighten PWM_LIMIT here if that becomes needed.)
-PWM_DEADBAND     = 22           # measured 2026-05-27: below |PWM|=22 cart
-                                # does not move. Asymmetric (fwd ≈ 103 pps,
-                                # rev ≈ 70 pps at PWM=22).
+PWM_DEADBAND     = 52           # measured with 80T pulley: fwd starts at 52,
+                                # reverse starts at 50; use the larger value
+                                # for one symmetric conservative compensation.
 
 GIVEUP_ANGLE_DEG = 10.0         # ANY controller must abort balance/swing if
                                 # |θ| exceeds this — pole has fallen too far.
@@ -94,7 +92,7 @@ GIVEUP_ANGLE_DEG = 10.0         # ANY controller must abort balance/swing if
 
 AUTO_RECENTER_ON_CLOSE = True
 RECENTER_PWM_MAX       = 120    # full-speed PWM when cart is far from center
-RECENTER_PWM_FLOOR     = 80     # min PWM near center; must exceed PWM_DEADBAND (22)
+RECENTER_PWM_FLOOR     = 80     # min PWM near center; must exceed PWM_DEADBAND (52)
 RECENTER_SLOW_ZONE     = 300    # pulses — inside this, PWM scales proportionally
 RECENTER_TOLERANCE     = 10     # pulses — stop within this many of 0
 RECENTER_TIMEOUT_S     = 10.0   # give up after this many seconds
