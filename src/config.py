@@ -47,8 +47,9 @@ PENDULUM_MASS_KG        = (PENDULUM_ROD_MASS_KG
                            + PENDULUM_TIP_MASS_KG)   # = 0.157 kg (derived)
 
 # ── Motor force calibration (used by LQR / RL) ───────
-FORCE_PER_PWM = 0.04221     # N/PWM, pwm_force_calibration 2026-07-22 (80T pulley;
-                            # fwd 0.04080 / rev 0.04363. Was 0.02083 @ 40T.)
+FORCE_PER_PWM = 0.04221        # N/PWM, provisional nominal value from three
+                            # 80T tests on 2026-08-11; measured c range
+                            # approximately 0.0389-0.0443 N/PWM.
 
 # ── Conversion helpers ───────────────────────────────
 def pulses_for_distance(meters: float) -> int:

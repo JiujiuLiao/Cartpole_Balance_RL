@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor_comm import MotorComm
 from config import (DEFAULT_SERIAL_PORT, SERIAL_BAUD,
-                    PULSES_PER_REV, WHEEL_DIAMETER_M, M_PER_PULSE)
+                    PULSES_PER_REV, WHEEL_DIAMETER_M, M_PER_PULSE,
+                    MAX_PULSES, pulses_for_distance)
 
 # ── Ports ─────────────────────────────────────────
 PORT = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
@@ -52,7 +53,15 @@ RETURN_PWM_FLOOR  = 80    # PWM 0–255 — minimum return PWM near origin; must
                            # update this after first run if motor doesn't move
 
 # ── Safety ────────────────────────────────────────
-BOUNDARY = 3000   # pulses ≈ 24.5 cm from center (track half-length ~42 cm = 5147 pulses)
+# Keep this limit in physical units. The old hard-coded 3000-pulse value was
+# based on the 40T pulley and is too far out for the current 80T setup.
+BOUNDARY_DISTANCE_CM = 27.7  # center-to-limit; matches the configured safe stop
+BOUNDARY = pulses_for_distance(BOUNDARY_DISTANCE_CM / 100.0)
+if BOUNDARY >= MAX_PULSES:
+    raise ValueError(
+        f"Test boundary ({BOUNDARY} pulses) must be inside "
+        f"MAX_PULSES ({MAX_PULSES} pulses)"
+    )
 
 # ── Return to origin (proportional) ───────────────
 def return_to_origin(comm, timeout=8.0):
@@ -269,8 +278,8 @@ def main():
           f"max={RETURN_PWM_MAX}, slow zone={RETURN_SLOW_ZONE} pulses)")
     print(f"  Encoder:     {PULSES_PER_REV} pulses/rev, "
           f"{WHEEL_DIAMETER_M*1000:.0f}mm pulley")
-    print(f"  Boundary:    ±{BOUNDARY} pulses "
-          f"(~{BOUNDARY * M_PER_PULSE * 100:.1f} cm from center)")
+    print(f"  Boundary:    ±{BOUNDARY_DISTANCE_CM:.1f} cm "
+          f"(derived ±{BOUNDARY} pulses)")
 
     try:
         comm = MotorComm(PORT, SERIAL_BAUD, verbose=True)
