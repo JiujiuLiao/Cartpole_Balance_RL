@@ -73,7 +73,7 @@ MIN_YELLOW_PIXELS = 20
 # Physical/geometric validation, not tape-size validation.  The pendulum line
 # rotates about the calibrated pivot, so its fitted infinite line should pass
 # close to that pivot even if the visible tape starts a little away from it.
-MAX_LINE_AXIS_DISTANCE_PX = 60.0
+MAX_LINE_AXIS_DISTANCE_PX = 150.0
 
 # A background line can be yellow and linear, but it usually cannot jump to the
 # pendulum angle continuously.  This is a safety gate for a single frame.
