@@ -7,18 +7,23 @@ It uses the existing yellow HSV calibration, but treats the yellow tape as
 one elongated line instead of using a yellow-centroid -> blue-centroid vector.
 
 Detection pipeline:
-  yellow HSV mask -> morphology -> elongated contour selection
-  -> cv2.fitLine() -> line direction -> angle relative to calibrated pivot
+  yellow HSV mask -> morphology -> connected yellow components
+  -> PCA/fitLine() principal direction -> line angle
 
-The line direction alone has a 180-degree ambiguity.  The calibrated pivot
-and the fitted tape centroid are used to orient the line from pivot toward the
-pendulum tip.  Therefore, the tape should start near the pivot and extend
-toward the tip, not be centered symmetrically around the pivot.
+This experimental version intentionally does NOT require a particular physical
+tape length, width, aspect ratio, or distance from the pivot.  Those values are
+diagnostic information only.  The only hard requirement is that there are
+enough yellow pixels to estimate a direction and that the pixels have a
+measurable linear structure.
 
-Angle convention (same as V3):
-  theta = 0       -> yellow tape points UP
-  theta = +/-pi   -> yellow tape points DOWN
-  +theta          -> clockwise as seen by the camera
+The angle is currently treated as a LINE ORIENTATION modulo 180 degrees:
+  theta = 0       -> the tape is vertical
+  +theta          -> clockwise line tilt as seen from the camera
+
+This version deliberately does not distinguish the pendulum pointing up from
+pointing down.  That will be added later with an asymmetric marker or another
+sensor.  Consequently, pole_up is published as 0 and this script must not yet
+be used as the final swing-up/balance angle source.
 
 The ZMQ message remains compatible with the existing camera subscriber:
   "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns,sensor_ts_ns"
@@ -61,11 +66,18 @@ HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
 DETECT_SCALE = 1.0
 
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-MIN_LINE_AREA_PX = 150
-MIN_LINE_LENGTH_PX = 80
-MIN_LINE_ASPECT = 4.0
-MAX_PIVOT_GAP_PX = 80
-MIN_CENTROID_AXIS_DIST_PX = 8
+# Only a small image-space guard against single-pixel noise.  This is not a
+# physical tape-size requirement.
+MIN_YELLOW_PIXELS = 20
+
+# Physical/geometric validation, not tape-size validation.  The pendulum line
+# rotates about the calibrated pivot, so its fitted infinite line should pass
+# close to that pivot even if the visible tape starts a little away from it.
+MAX_LINE_AXIS_DISTANCE_PX = 60.0
+
+# A background line can be yellow and linear, but it usually cannot jump to the
+# pendulum angle continuously.  This is a safety gate for a single frame.
+MAX_FRAME_ANGLE_STEP_DEG = 35.0
 
 OMEGA_LPF_ALPHA = 0.55
 ZMQ_PORT = 9999
@@ -77,6 +89,11 @@ HSV_CALIB_FILE = os.path.join(_VISION_DIR, "hsv_calib.json")
 WINDOW = "Yellow tape line"
 HSV_WIN = "Yellow HSV tuner"
 DISPLAY_EVERY_N = 2
+
+
+def cv_scalar(value):
+    """Convert a one-element OpenCV/NumPy result to a Python float."""
+    return float(np.asarray(value).reshape(-1)[0])
 
 
 # -------------------- Calibration persistence --------------------
@@ -129,76 +146,76 @@ def save_hsv(yl, yh):
 # -------------------- Yellow line detection --------------------
 
 def _line_candidate(contour, mask, axis, detect_scale):
-    """Return line features for one contour, or None if it is not line-like."""
+    """Fit a line to one yellow component without fixed physical-size gates."""
     inv = 1.0 / detect_scale
-    area = cv2.contourArea(contour) * inv * inv
-    if area < MIN_LINE_AREA_PX:
+
+    # Use the filled component for fitting, not just the contour boundary.
+    component = np.zeros_like(mask)
+    cv2.drawContours(component, [contour], -1, 255, thickness=-1)
+    points_small = cv2.findNonZero(component)
+    if points_small is None or len(points_small) < MIN_YELLOW_PIXELS:
+        return None
+    points = points_small.reshape(-1, 2).astype(np.float32) * inv
+
+    # PCA measures whether the yellow pixels have a dominant line direction.
+    # This is a confidence score, not a hard tape length/width requirement.
+    centered = points - points.mean(axis=0)
+    covariance = np.cov(centered, rowvar=False)
+    eigenvalues = np.linalg.eigvalsh(covariance)
+    lambda_min = float(max(eigenvalues[0], 0.0))
+    lambda_max = float(max(eigenvalues[-1], 0.0))
+    linearity = (lambda_max - lambda_min) / (lambda_max + lambda_min + 1e-9)
+    if lambda_max <= 1e-9 or linearity <= 0.01:
         return None
 
     rect = cv2.minAreaRect(contour)
     width, height = rect[1]
     long_side = max(width, height) * inv
     short_side = min(width, height) * inv
-    if long_side < MIN_LINE_LENGTH_PX or short_side <= 0:
-        return None
-
-    aspect = long_side / short_side
-    if aspect < MIN_LINE_ASPECT:
-        return None
-
-    # Use the filled component for fitting, not just the contour boundary.
-    component = np.zeros_like(mask)
-    cv2.drawContours(component, [contour], -1, 255, thickness=-1)
-    points_small = cv2.findNonZero(component)
-    if points_small is None or len(points_small) < 10:
-        return None
-    points = points_small.reshape(-1, 2).astype(np.float32) * inv
-
-    contour_points = contour.reshape(-1, 2).astype(np.float32) * inv
-    dx = contour_points[:, 0] - axis[0]
-    dy = contour_points[:, 1] - axis[1]
-    pivot_gap = float(np.min(np.hypot(dx, dy)))
-    if pivot_gap > MAX_PIVOT_GAP_PX:
-        return None
-
-    centroid = points.mean(axis=0)
-    centroid_dist = float(np.hypot(centroid[0] - axis[0], centroid[1] - axis[1]))
-    if centroid_dist < MIN_CENTROID_AXIS_DIST_PX:
-        return None
+    aspect = long_side / short_side if short_side > 1e-6 else float("inf")
 
     fit_points = points.reshape(-1, 1, 2)
     vx, vy, x0, y0 = cv2.fitLine(
         fit_points, cv2.DIST_L2, 0, 0.01, 0.01
     )
-    vx = float(vx)
-    vy = float(vy)
+    vx = cv_scalar(vx)
+    vy = cv_scalar(vy)
 
-    # Orient the otherwise ambiguous fitted line from pivot toward the tape
-    # centroid.  This gives the direction needed for +/- theta.
-    to_centroid = centroid - np.array(axis, dtype=np.float32)
-    if vx * float(to_centroid[0]) + vy * float(to_centroid[1]) < 0:
-        vx = -vx
-        vy = -vy
+    # Distance from the calibrated pivot to the fitted infinite line.
+    # For a correct pendulum line this should be small even when the tape does
+    # not physically touch the pivot.
+    line_point = np.array(
+        [cv_scalar(x0) * inv, cv_scalar(y0) * inv], dtype=np.float32
+    )
+    axis_point = np.array(axis, dtype=np.float32)
+    axis_delta = axis_point - line_point
+    axis_line_distance = abs(vx * float(axis_delta[1])
+                             - vy * float(axis_delta[0]))
+    if axis_line_distance > MAX_LINE_AXIS_DISTANCE_PX:
+        return None
 
-    # Prefer a long, elongated component close to the calibrated pivot.
-    score = long_side * aspect / (1.0 + pivot_gap)
+    # A longer and more linear component wins if there are several yellow
+    # components.  No fixed length/aspect threshold is applied here.
+    score = linearity * math.sqrt(float(len(points)))
     return {
         "contour": contour,
-        "centroid": centroid,
+        "centroid": points.mean(axis=0),
         "vx": vx,
         "vy": vy,
         "length": long_side,
         "width": short_side,
         "aspect": aspect,
-        "pivot_gap": pivot_gap,
+        "linearity": linearity,
+        "pixels": len(points),
+        "axis_line_distance": axis_line_distance,
         "score": score,
-        "x0": float(x0) * inv,
-        "y0": float(y0) * inv,
+        "x0": cv_scalar(x0) * inv,
+        "y0": cv_scalar(y0) * inv,
     }
 
 
-def detect_yellow_line(frame, yl, yh, axis, detect_scale):
-    """Detect the best elongated yellow component in full-frame coordinates."""
+def detect_yellow_line(frame, yl, yh, axis, detect_scale, previous_angle=None):
+    """Detect the strongest linear yellow component in full-frame coordinates."""
     if detect_scale != 1.0:
         small = cv2.resize(
             frame, None, fx=detect_scale, fy=detect_scale,
@@ -219,6 +236,17 @@ def detect_yellow_line(frame, yl, yh, axis, detect_scale):
     for contour in contours:
         candidate = _line_candidate(contour, mask, axis, detect_scale)
         if candidate is not None:
+            candidate["angle"] = compute_angle(candidate)
+            if previous_angle is not None:
+                candidate["angle_step"] = abs(
+                    line_angle_delta(candidate["angle"], previous_angle)
+                )
+                if candidate["angle_step"] > math.radians(
+                    MAX_FRAME_ANGLE_STEP_DEG
+                ):
+                    continue
+            else:
+                candidate["angle_step"] = 0.0
             candidates.append(candidate)
 
     if not candidates:
@@ -227,20 +255,29 @@ def detect_yellow_line(frame, yl, yh, axis, detect_scale):
 
 
 def compute_angle(candidate):
-    """Convert an oriented image line into the V3 angle convention."""
+    """Return line tilt from vertical, normalized to [-pi/2, +pi/2)."""
     # Image y increases downwards; therefore -vy is the upward coordinate.
-    return math.atan2(candidate["vx"], -candidate["vy"])
+    raw = math.atan2(candidate["vx"], -candidate["vy"])
+    return wrap_line_angle(raw)
+
+
+def wrap_line_angle(angle):
+    """Wrap an unoriented line angle to one 180-degree interval."""
+    half_pi = 0.5 * math.pi
+    return (angle + half_pi) % math.pi - half_pi
+
+
+def line_angle_delta(current, previous):
+    """Smallest signed difference between two unoriented line angles."""
+    return wrap_line_angle(current - previous)
 
 
 def unwrap(prev, current):
     if prev is None:
         return current
-    delta = current - prev
-    if delta > math.pi:
-        return current - 2.0 * math.pi
-    if delta < -math.pi:
-        return current + 2.0 * math.pi
-    return current
+    # An unoriented line repeats every pi, not every 2*pi.
+    delta = (current - prev + 0.5 * math.pi) % math.pi - 0.5 * math.pi
+    return prev + delta
 
 
 # -------------------- UI helpers --------------------
@@ -281,8 +318,8 @@ def fmt(value, digits=6):
 # -------------------- Main --------------------
 
 def main():
-    global MIN_LINE_AREA_PX, MIN_LINE_LENGTH_PX
-    global MIN_LINE_ASPECT, MAX_PIVOT_GAP_PX, DETECT_SCALE
+    global MIN_YELLOW_PIXELS, DETECT_SCALE
+    global MAX_LINE_AXIS_DISTANCE_PX, MAX_FRAME_ANGLE_STEP_DEG
 
     parser = argparse.ArgumentParser(
         description="Cart-pole vision: yellow tape line angle detector"
@@ -294,27 +331,33 @@ def main():
     parser.add_argument("--detect-scale", type=float, default=DETECT_SCALE,
                         choices=(0.5, 1.0),
                         help="Detection scale; use 1.0 for accuracy testing")
-    parser.add_argument("--min-area", type=int, default=MIN_LINE_AREA_PX,
-                        help="Minimum yellow component area in full-frame px")
-    parser.add_argument("--min-length", type=int, default=MIN_LINE_LENGTH_PX,
-                        help="Minimum fitted line length in full-frame px")
-    parser.add_argument("--min-aspect", type=float, default=MIN_LINE_ASPECT,
-                        help="Minimum long/short aspect ratio")
-    parser.add_argument("--pivot-gap", type=int, default=MAX_PIVOT_GAP_PX,
-                        help="Maximum distance from contour to pivot in px")
+    parser.add_argument("--min-pixels", type=int, default=MIN_YELLOW_PIXELS,
+                        help="Minimum yellow pixels used to fit a line")
+    parser.add_argument(
+        "--axis-line-gap", type=float, default=MAX_LINE_AXIS_DISTANCE_PX,
+        help="Maximum fitted-line distance from pivot in pixels"
+    )
+    parser.add_argument(
+        "--max-angle-step-deg", type=float,
+        default=MAX_FRAME_ANGLE_STEP_DEG,
+        help="Reject a candidate that jumps this many degrees in one frame"
+    )
     parser.add_argument("--zmq-port", type=int, default=ZMQ_PORT,
                         help="ZMQ PUB port (default 9999)")
     parser.add_argument("--record", type=str, default=None,
                         help="Optional CSV path for diagnostic recording")
     parser.add_argument("--no-gui", action="store_true",
                         help="Headless mode; quit with Ctrl+C")
+    parser.add_argument(
+        "--with-raw", action="store_true",
+        help="Also request the explicit 1536x864 RAW stream (diagnostic only)"
+    )
     args = parser.parse_args()
 
     DETECT_SCALE = args.detect_scale
-    MIN_LINE_AREA_PX = args.min_area
-    MIN_LINE_LENGTH_PX = args.min_length
-    MIN_LINE_ASPECT = args.min_aspect
-    MAX_PIVOT_GAP_PX = args.pivot_gap
+    MIN_YELLOW_PIXELS = args.min_pixels
+    MAX_LINE_AXIS_DISTANCE_PX = args.axis_line_gap
+    MAX_FRAME_ANGLE_STEP_DEG = args.max_angle_step_deg
 
     gui = not args.no_gui
     axis_x, axis_y = load_axis()
@@ -331,16 +374,18 @@ def main():
     print(f"  camera       : {W}x{H} main stream, target {TARGET_FPS} Hz")
     print(f"  detect scale : {DETECT_SCALE}")
     print(f"  pivot        : ({axis_x}, {axis_y})")
-    print(f"  line rules   : length >= {MIN_LINE_LENGTH_PX}px, "
-          f"aspect >= {MIN_LINE_ASPECT:.1f}, pivot gap <= {MAX_PIVOT_GAP_PX}px")
+    print(f"  line rule    : yellow pixels >= {MIN_YELLOW_PIXELS}; "
+          "linearity is used only for candidate ranking")
+    print(f"  pivot rule   : fitted line gap <= {MAX_LINE_AXIS_DISTANCE_PX:.0f}px; "
+          f"frame jump <= {MAX_FRAME_ANGLE_STEP_DEG:.0f}deg")
     print(f"  ZMQ PUB      : tcp://*:{args.zmq_port}")
+    print(f"  RAW stream   : {'1536x864 requested' if args.with_raw else 'disabled (main only)'}")
     print("  NOTE         : measurement/comparison first; not LQR-ready yet")
 
     picam2 = Picamera2()
-    config = picam2.create_video_configuration(
-        main={"size": (W, H), "format": "RGB888"},
-        raw={"size": (RAW_W, RAW_H)},
-        controls={
+    camera_config = {
+        "main": {"size": (W, H), "format": "RGB888"},
+        "controls": {
             "FrameDurationLimits": (FRAME_DURATION_US, FRAME_DURATION_US),
             "ExposureTime": EXPOSURE_US,
             "AnalogueGain": ANALOGUE_GAIN,
@@ -348,8 +393,11 @@ def main():
             "AeEnable": False,
             "LensPosition": LENS_POSITION,
         },
-        buffer_count=4,
-    )
+        "buffer_count": 4,
+    }
+    if args.with_raw:
+        camera_config["raw"] = {"size": (RAW_W, RAW_H)}
+    config = picam2.create_video_configuration(**camera_config)
     picam2.configure(config)
     picam2.start()
     time.sleep(0.4)
@@ -368,7 +416,9 @@ def main():
         record_writer.writerow([
             "t_s", "sensor_ts_ns", "theta_rad", "omega_rad_s", "valid",
             "line_length_px", "line_width_px", "line_aspect",
-            "pivot_gap_px", "centroid_x_px", "centroid_y_px", "fps",
+            "linearity", "yellow_pixels", "axis_line_distance_px",
+            "angle_step_rad", "centroid_x_px", "centroid_y_px",
+            "fps",
         ])
         print(f"  record       : {args.record}")
 
@@ -387,7 +437,8 @@ def main():
     real_fps = 0.0
     frame_idx = 0
 
-    print("[keys] c=calibrate pivot | h=HSV tuner | s=save HSV | q=quit")
+    show_mask = False
+    print("[keys] c=calibrate pivot | h=HSV tuner | s=save HSV | m=mask | q=quit")
 
     try:
         while True:
@@ -405,7 +456,7 @@ def main():
                 read_hsv_tuner(yl, yh)
 
             candidate, mask = detect_yellow_line(
-                frame, yl, yh, axis, DETECT_SCALE
+                frame, yl, yh, axis, DETECT_SCALE, angle_prev
             )
             valid = candidate is not None
             if valid:
@@ -428,8 +479,9 @@ def main():
                 fps_t0 = now
 
             if valid:
-                wrapped = math.atan2(math.sin(angle), math.cos(angle))
-                pole_up = int(abs(wrapped) < math.radians(5.0))
+                wrapped = wrap_line_angle(angle)
+                # Up/down is intentionally not solved in this version.
+                pole_up = 0
                 sock.send_string(
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(wrapped)},"
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(omega_filt)},"
@@ -437,7 +489,7 @@ def main():
                     f"{sensor_ts if sensor_ts is not None else 0}"
                 )
             else:
-                wrapped = math.atan2(math.sin(angle), math.cos(angle))
+                wrapped = wrap_line_angle(angle)
 
             if record_writer:
                 record_writer.writerow([
@@ -446,12 +498,20 @@ def main():
                     fmt(candidate["length"], 3) if valid else "",
                     fmt(candidate["width"], 3) if valid else "",
                     fmt(candidate["aspect"], 3) if valid else "",
-                    fmt(candidate["pivot_gap"], 3) if valid else "",
+                    fmt(candidate["linearity"], 6) if valid else "",
+                    candidate["pixels"] if valid else "",
+                    fmt(candidate["axis_line_distance"], 3) if valid else "",
+                    fmt(candidate["angle_step"], 6) if valid else "",
                     fmt(candidate["centroid"][0], 3) if valid else "",
                     fmt(candidate["centroid"][1], 3) if valid else "",
                     fmt(real_fps, 3),
                 ])
-                record_file.flush()
+                # Do not force a filesystem flush for every frame: that can
+                # perturb a 120 Hz timing test.  The file is closed/flushed in
+                # the finally block, and this periodic flush limits loss if
+                # the process is interrupted.
+                if frame_idx % TARGET_FPS == 0:
+                    record_file.flush()
 
             if gui and frame_idx % DISPLAY_EVERY_N == 0:
                 display = frame.copy()
@@ -488,12 +548,22 @@ def main():
                         f"  L={candidate['length']:.0f}px"
                         f" W={candidate['width']:.1f}px"
                         f" A={candidate['aspect']:.1f}"
+                        f" lin={candidate['linearity']:.2f}"
+                        f" N={candidate['pixels']}"
+                        f" gap={candidate['axis_line_distance']:.0f}px"
                     )
                 cv2.putText(
                     display, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX,
                     0.48, (255, 255, 255), 1, cv2.LINE_AA
                 )
                 cv2.imshow(WINDOW, display)
+                if show_mask:
+                    mask_display = mask
+                    if DETECT_SCALE != 1.0:
+                        mask_display = cv2.resize(
+                            mask_display, (W, H), interpolation=cv2.INTER_NEAREST
+                        )
+                    cv2.imshow("Yellow mask", mask_display)
 
             if calibrator.click is not None:
                 axis = calibrator.click
@@ -514,6 +584,11 @@ def main():
                     open_hsv_tuner(yl, yh)
                     tuner_open = True
                     print("[hsv] tuner opened")
+                elif key == ord("m"):
+                    show_mask = not show_mask
+                    if not show_mask:
+                        cv2.destroyWindow("Yellow mask")
+                    print(f"[mask] {'shown' if show_mask else 'hidden'}")
                 elif key == ord("s"):
                     save_hsv(yl, yh)
                     print("[hsv] yellow thresholds saved")
