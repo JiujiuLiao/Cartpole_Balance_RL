@@ -1,24 +1,4 @@
-"""
-Record raw free-swing data for the fixed-cart pendulum experiment.
-
-This recorder is deliberately separate from the control/validation logger:
-it does not send motor commands, does not use EKF output, and does not use
-ZMQ conflate mode. It expects camerapreview_detect_yellow_tape_line_V1.py to
-run with --publish-invalid --down-reference, which includes invalid camera
-frames and represents the known downward equilibrium near +/-pi.
-
-Run on the Raspberry Pi, after starting the current V1 camera publisher:
-
-    python3 src/vision/camerapreview_detect_yellow_tape_line_V1.py \
-        --no-gui --publish-invalid --down-reference
-
-    python3 free_swing_recorder.py --release-angle-deg 5 \
-        --run-id 5deg_run01 --duration 25
-
-The operator holds the pendulum at the requested angle.  After ENTER the
-script records a short pre-release interval, prints RELEASE NOW, then records
-the requested free-swing duration.
-"""
+"""Record raw fixed-cart free-swing data."""
 
 import argparse
 import csv
@@ -27,7 +7,6 @@ import sys
 import time
 from pathlib import Path
 
-# Allow direct execution from src/calibration/.
 SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 
@@ -50,11 +29,7 @@ FIELDS = [
 
 
 def parse_camera_message(msg):
-    """Return raw fields from the current publisher's extended message.
-
-    The recorder intentionally rejects the old 8/9-field protocol instead of
-    silently treating its already-filtered stream as 100%% valid.
-    """
+    """Parse the current extended camera message."""
     if not msg:
         return None
     parts = msg.split(",") if "," in msg else msg.split()

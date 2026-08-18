@@ -1,18 +1,4 @@
-"""
-Offline acceptance analysis for fixed-cart pendulum free-swing runs.
-
-Examples:
-
-    python3 analyze_free_swing.py \
-        --input ../../data/calibration/free_swing
-
-    python3 analyze_free_swing.py --input path/to/one_run.csv
-
-The analysis uses only theta_raw_rad and sensor_ts_ns.  It estimates the
-period by zero crossings and by an interpolated FFT peak, then reports the
-equivalent gravity estimate, cart movement, valid-frame ratio, cycle count,
-method agreement, and five-run CV grouped by release angle.
-"""
+"""Analyze fixed-cart free-swing CSV files."""
 
 import argparse
 import csv
@@ -22,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Allow direct execution from src/analysis/.
 SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 

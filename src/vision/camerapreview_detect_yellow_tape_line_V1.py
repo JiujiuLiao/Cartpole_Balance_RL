@@ -1,46 +1,5 @@
 #!/usr/bin/env python3
-"""
-Cart-pole pendulum angle detector (V1 - yellow tape line fit).
-
-This is the current Pi-side vision publisher as of 2026-08-18.  It supersedes
-camerapreview_detect_color_V3.py for current measurement and balance work.
-It uses the existing yellow HSV calibration, but treats the yellow tape as
-one elongated line instead of using a yellow-centroid -> blue-centroid vector.
-
-Detection pipeline:
-  yellow HSV mask -> morphology -> connected yellow components
-  -> PCA/fitLine() principal direction -> line angle
-
-This experimental version intentionally does NOT require a particular physical
-tape length, width, aspect ratio, or distance from the pivot.  Those values are
-diagnostic information only.  The only hard requirement is that there are
-enough yellow pixels to estimate a direction and that the pixels have a
-measurable linear structure.
-
-The angle is currently treated as a LINE ORIENTATION modulo 180 degrees:
-  theta = 0       -> the tape is vertical
-  +theta          -> clockwise line tilt as seen from the camera
-
-This version deliberately does not distinguish the pendulum pointing up from
-pointing down.  That requires an asymmetric marker or another sensor.
-Consequently, pole_up is published as 0.  The stream is suitable for an
-isolated balance experiment that is initialized upright, and for small free
-oscillation tests around a known vertical equilibrium.  It is NOT suitable for
-automatic swing-up or any state machine that must distinguish up from down.
-
-The ZMQ message remains compatible with the existing camera subscriber:
-  "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns,sensor_ts_ns,valid,frame_id"
-By default only valid frames are published, preserving controller behavior.
-Use --publish-invalid for raw free-swing logging so every camera frame is
-published and the valid-frame ratio can be measured.
-Use --down-reference for the fixed-cart free-swing experiment.  In that mode
-the vertical downward equilibrium is represented near +/-pi ( +/-180 deg ),
-while the upright vertical line remains indistinguishable because this
-line-only detector has no up/down marker.
-
-Static angle sign/zero and dynamic latency still have to be validated for the
-current mechanical/camera setup before judging a controller from its output.
-"""
+"""Yellow-tape pendulum publisher: 0=up, +/-pi=down, positive=clockwise."""
 
 import argparse
 import cv2
@@ -54,8 +13,6 @@ import zmq
 from picamera2 import Picamera2
 
 
-# -------------------- Camera --------------------
-
 RAW_W, RAW_H = 1536, 864
 SCALE = 0.5
 W = int(RAW_W * SCALE)
@@ -67,26 +24,16 @@ EXPOSURE_US = 4000
 ANALOGUE_GAIN = 4.0
 LENS_POSITION = 4.5
 
-# Yellow thresholds retained from the previous dual-colour detector.
 HSV_YELLOW_LOW = np.array([18, 130, 90], dtype=np.uint8)
 HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
 
-# Accuracy-test default: use the full 768x432 main stream.  Set to 0.5 from
-# the command line if the Raspberry Pi cannot sustain the target frame rate.
 DETECT_SCALE = 1.0
 
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-# Only a small image-space guard against single-pixel noise.  This is not a
-# physical tape-size requirement.
 MIN_YELLOW_PIXELS = 20
 
-# Physical/geometric validation, not tape-size validation.  The pendulum line
-# rotates about the calibrated pivot, so its fitted infinite line should pass
-# close to that pivot even if the visible tape starts a little away from it.
 MAX_LINE_AXIS_DISTANCE_PX = 150.0
 
-# A background line can be yellow and linear, but it usually cannot jump to the
-# pendulum angle continuously.  This is a safety gate for a single frame.
 MAX_FRAME_ANGLE_STEP_DEG = 35.0
 
 OMEGA_LPF_ALPHA = 0.55
@@ -105,8 +52,6 @@ def cv_scalar(value):
     """Convert a one-element OpenCV/NumPy result to a Python float."""
     return float(np.asarray(value).reshape(-1)[0])
 
-
-# -------------------- Calibration persistence --------------------
 
 def load_axis():
     if os.path.exists(AXIS_CALIB_FILE):
@@ -138,8 +83,6 @@ def load_hsv():
 
 
 def save_hsv(yl, yh):
-    # Preserve the blue entries if the shared V3 calibration file already has
-    # them, so opening the tuner here does not erase V3's blue thresholds.
     d = {}
     if os.path.exists(HSV_CALIB_FILE):
         try:
@@ -153,13 +96,10 @@ def save_hsv(yl, yh):
         json.dump(d, f)
 
 
-# -------------------- Yellow line detection --------------------
-
 def _line_candidate(contour, mask, axis, detect_scale):
     """Fit a line to one yellow component without fixed physical-size gates."""
     inv = 1.0 / detect_scale
 
-    # Use the filled component for fitting, not just the contour boundary.
     component = np.zeros_like(mask)
     cv2.drawContours(component, [contour], -1, 255, thickness=-1)
     points_small = cv2.findNonZero(component)
@@ -167,8 +107,6 @@ def _line_candidate(contour, mask, axis, detect_scale):
         return None
     points = points_small.reshape(-1, 2).astype(np.float32) * inv
 
-    # PCA measures whether the yellow pixels have a dominant line direction.
-    # This is a confidence score, not a hard tape length/width requirement.
     centered = points - points.mean(axis=0)
     covariance = np.cov(centered, rowvar=False)
     eigenvalues = np.linalg.eigvalsh(covariance)
@@ -191,9 +129,6 @@ def _line_candidate(contour, mask, axis, detect_scale):
     vx = cv_scalar(vx)
     vy = cv_scalar(vy)
 
-    # Distance from the calibrated pivot to the fitted infinite line.
-    # For a correct pendulum line this should be small even when the tape does
-    # not physically touch the pivot.
     line_point = np.array(
         [cv_scalar(x0) * inv, cv_scalar(y0) * inv], dtype=np.float32
     )
@@ -204,9 +139,9 @@ def _line_candidate(contour, mask, axis, detect_scale):
     if axis_line_distance > MAX_LINE_AXIS_DISTANCE_PX:
         return None
 
-    # A longer and more linear component wins if there are several yellow
-    # components.  No fixed length/aspect threshold is applied here.
     score = linearity * math.sqrt(float(len(points)))
+    axis_point = np.asarray(axis, dtype=np.float32)
+    tip = points[np.argmax(np.sum((points - axis_point) ** 2, axis=1))]
     return {
         "contour": contour,
         "centroid": points.mean(axis=0),
@@ -221,6 +156,7 @@ def _line_candidate(contour, mask, axis, detect_scale):
         "score": score,
         "x0": cv_scalar(x0) * inv,
         "y0": cv_scalar(y0) * inv,
+        "tip": tip,
     }
 
 
@@ -246,7 +182,7 @@ def detect_yellow_line(frame, yl, yh, axis, detect_scale, previous_angle=None):
     for contour in contours:
         candidate = _line_candidate(contour, mask, axis, detect_scale)
         if candidate is not None:
-            candidate["angle"] = compute_angle(candidate)
+            candidate["angle"] = compute_angle(candidate, axis)
             if previous_angle is not None:
                 candidate["angle_step"] = abs(
                     line_angle_delta(candidate["angle"], previous_angle)
@@ -264,21 +200,14 @@ def detect_yellow_line(frame, yl, yh, axis, detect_scale, previous_angle=None):
     return max(candidates, key=lambda item: item["score"]), mask
 
 
-def compute_angle(candidate):
-    """Return line tilt from vertical, normalized to [-pi/2, +pi/2)."""
-    # Image y increases downwards; therefore -vy is the upward coordinate.
-    raw = math.atan2(candidate["vx"], -candidate["vy"])
-    return wrap_line_angle(raw)
+def compute_angle(candidate, axis):
+    tip_x, tip_y = candidate["tip"]
+    dx = float(tip_x - axis[0])
+    dy_up = float(axis[1] - tip_y)
+    return wrap_angle(math.atan2(dx, dy_up))
 
 
-def wrap_line_angle(angle):
-    """Wrap an unoriented line angle to one 180-degree interval."""
-    half_pi = 0.5 * math.pi
-    return (angle + half_pi) % math.pi - half_pi
-
-
-def wrap_absolute_angle(angle):
-    """Wrap a directed angle to (-pi, pi], preferring +pi at the branch."""
+def wrap_angle(angle):
     wrapped = (angle + math.pi) % (2.0 * math.pi) - math.pi
     if math.isclose(wrapped, -math.pi, abs_tol=1e-12):
         return math.pi
@@ -286,19 +215,15 @@ def wrap_absolute_angle(angle):
 
 
 def line_angle_delta(current, previous):
-    """Smallest signed difference between two unoriented line angles."""
-    return wrap_line_angle(current - previous)
+    return wrap_angle(current - previous)
 
 
 def unwrap(prev, current):
     if prev is None:
         return current
-    # An unoriented line repeats every pi, not every 2*pi.
-    delta = (current - prev + 0.5 * math.pi) % math.pi - 0.5 * math.pi
+    delta = wrap_angle(current - prev)
     return prev + delta
 
-
-# -------------------- UI helpers --------------------
 
 class AxisCalibrator:
     def __init__(self):
@@ -333,8 +258,6 @@ def fmt(value, digits=6):
     return f"{value:.{digits}f}"
 
 
-# -------------------- Main --------------------
-
 def main():
     global MIN_YELLOW_PIXELS, DETECT_SCALE
     global MAX_LINE_AXIS_DISTANCE_PX, MAX_FRAME_ANGLE_STEP_DEG
@@ -367,10 +290,6 @@ def main():
     parser.add_argument("--publish-invalid", action="store_true",
                         help="Publish every frame with valid=0/1 and frame_id; "
                              "required by raw-data loggers")
-    parser.add_argument("--down-reference", action="store_true",
-                        help="Publish angle using the free-swing convention: "
-                             "downward vertical near +/-180 deg. Use only "
-                             "with a pendulum known to start downward.")
     parser.add_argument("--no-gui", action="store_true",
                         help="Headless mode; quit with Ctrl+C")
     parser.add_argument(
@@ -403,14 +322,11 @@ def main():
           "linearity is used only for candidate ranking")
     print(f"  pivot rule   : fitted line gap <= {MAX_LINE_AXIS_DISTANCE_PX:.0f}px; "
           f"frame jump <= {MAX_FRAME_ANGLE_STEP_DEG:.0f}deg")
+    print("  angle        : 0 deg up, +/-180 deg down, positive clockwise")
     print(f"  ZMQ PUB      : tcp://*:{args.zmq_port}")
     print(f"  RAW stream   : {'1536x864 requested' if args.with_raw else 'disabled (main only)'}")
-    print("  NOTE         : line angle is modulo 180deg; up/down are indistinguishable")
-    print("                 automatic swing-up is disabled for this vision source")
     if args.publish_invalid:
         print("  raw logging  : --publish-invalid enabled")
-    if args.down_reference:
-        print("  angle output : down-reference; downward vertical is near +/-180deg")
 
     picam2 = Picamera2()
     camera_config = {
@@ -490,7 +406,7 @@ def main():
             )
             valid = candidate is not None
             if valid:
-                angle_raw = compute_angle(candidate)
+                angle_raw = compute_angle(candidate, axis)
                 angle = unwrap(angle_prev, angle_raw)
                 if angle_prev is not None and dt > 1e-6:
                     omega_inst = (angle - angle_prev) / dt
@@ -508,17 +424,9 @@ def main():
                 fps_n = 0
                 fps_t0 = now
 
-            if args.down_reference:
-                # The line detector cannot distinguish up from down.  For a
-                # known downward-start free swing, offset its local vertical
-                # angle by pi so the raw stream follows the project's
-                # 0=upright, +/-pi=downward convention in the local experiment.
-                wrapped = wrap_absolute_angle(math.pi + angle)
-            else:
-                wrapped = wrap_line_angle(angle)
+            wrapped = wrap_angle(angle)
             if valid or args.publish_invalid:
-                # Up/down is intentionally not solved in this version.
-                pole_up = 0
+                pole_up = int(abs(wrapped) < math.radians(5))
                 sock.send_string(
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(wrapped)},"
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(omega_filt)},"
@@ -542,10 +450,6 @@ def main():
                     fmt(candidate["centroid"][1], 3) if valid else "",
                     fmt(real_fps, 3),
                 ])
-                # Do not force a filesystem flush for every frame: that can
-                # perturb a 120 Hz timing test.  The file is closed/flushed in
-                # the finally block, and this periodic flush limits loss if
-                # the process is interrupted.
                 if frame_idx % TARGET_FPS == 0:
                     record_file.flush()
 
