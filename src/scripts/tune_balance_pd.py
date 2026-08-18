@@ -8,14 +8,15 @@ Pairs with `balance_pd.py` (library) — same control law, different entry.
 
 
 TWO-PROCESS architecture, both ON the Raspberry Pi:
-    Terminal 1:  python3 vision/camerapreview_detect_color_V3.py
-                 -> vision (verified correct), PUBs theta/omega/pole_up on :9999
+    Terminal 1:  python3 vision/camerapreview_detect_yellow_tape_line_V1.py
+                 -> yellow-line vision, PUBs theta/omega on :9999
     Terminal 2:  python3 tune_balance_pd.py        (this file)
                  -> SUBs the angle stream -> PID -> serial -> ESP32
 
-This file no longer does any image processing. The angle comes from V3 over
-ZMQ (localhost). Start V3 FIRST, confirm its preview angle is correct, then run
-this controller.
+This file no longer does any image processing. Start the yellow-line publisher
+first and confirm its preview sign/zero. Its angle is modulo 180 degrees, so
+upright and hanging both read 0; this tuner is for manually initialized upright
+balance only, not automatic swing-up.
 
 Control law (matches Varghese 2017 "2-PID with Ki=0" structure):
     pwm = ANGLE_SIGN * (-Kp * theta_deg)     # angle proportional
@@ -28,7 +29,8 @@ Then: deadband compensation -> PWM saturation -> serial.
 ========================================================================
 [x] PULSES_PER_REV    : 700  (measured 2026-05-27); MAX_PULSES depends on this
 [x] PWM_DEADBAND      : 22   (measured 2026-05-27)
-[x] Vision angle      : verified correct in V3 preview (0=up, +-180=hanging)
+[ ] Vision angle      : re-verify yellow-line zero/sign before motor-on;
+                        0 means vertical and does NOT distinguish up/down
 [ ] ANGLE_SIGN        : diagnostic mode must show
                         "pwm_raw POSITIVE when pendulum tilts right"
                         if not, flip ANGLE_SIGN to -1
@@ -54,7 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber
 from config import (
-    DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
+    DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR, CURRENT_VISION_SCRIPT,
     PENDULUM_L_M, MAX_PULSES, BALANCE_LOGS_DIR,
     PWM_LIMIT, PWM_DEADBAND, GIVEUP_ANGLE_DEG,
 )
@@ -64,7 +66,7 @@ from config import (
 # Connections
 # ------------------------------------------------------------------------
 SERIAL_PORT    = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
-ZMQ_ADDR       = DEFAULT_ZMQ_ADDR     # V3 publisher on the same Pi
+ZMQ_ADDR       = DEFAULT_ZMQ_ADDR     # current publisher on the same Pi
 ZMQ_TIMEOUT_MS = 200
 
 
@@ -168,10 +170,10 @@ def main():
     print(f"  Vision (ZMQ)   : {ZMQ_ADDR}")
     print()
 
-    # ---- Vision: subscribe to V3 ----------------------------------------
+    # ---- Vision: subscribe to current yellow-line publisher -------------
     cam = CameraSubscriber(ZMQ_ADDR, recv_timeout_ms=ZMQ_TIMEOUT_MS, conflate=True)
-    print(f"  Subscribed to V3 vision at {ZMQ_ADDR}")
-    print("  >>> Make sure camerapreview_detect_color_V3.py is running first! <<<")
+    print(f"  Subscribed to {CURRENT_VISION_SCRIPT} at {ZMQ_ADDR}")
+    print(f"  >>> Make sure {CURRENT_VISION_SCRIPT} is running first! <<<")
 
     # ---- Serial ----------------------------------------------------------
     try:
@@ -187,15 +189,15 @@ def main():
     print("=" * 64)
     print("  DIAGNOSTIC MODE - motor OFF")
     print("=" * 64)
-    print("  Hold pendulum near upright; theta should track it (V3 must be running).")
+    print("  Hold pendulum near upright; theta should track its line orientation.")
     print(f"  Motor will only run when |theta| <= {CATCH_ANGLE_DEG} deg "
           f"for {CATCH_HOLD_S}s.")
     print("  Verify in diagnostic:")
-    print("    - theta around 0 when upright, ~+-180 when hanging")
+    print("    - theta around 0 when vertical; vision cannot tell UP from DOWN")
     print("    - omega > 0 when falling right")
     print("    - pwm_raw POSITIVE when tilted right  (else flip ANGLE_SIGN)")
     print()
-    print("  Press ENTER to ARM motor (it still won't run until catch met).")
+    print("  Type UPRIGHT and press ENTER only while physically holding the pole UP.")
     print()
     print(f"  {'theta':>8} {'err':>7} {'omega':>8} {'cart':>7} "
           f"{'pwm_raw':>8} {'pwm':>6} {'pu':>4}  status")
@@ -217,8 +219,13 @@ def main():
     enable_flag   = [False]
 
     def wait_enter():
-        input()
-        enable_flag[0] = True
+        while not enable_flag[0]:
+            confirmation = input().strip()
+            if confirmation == "UPRIGHT":
+                enable_flag[0] = True
+            else:
+                print("\n  Motor remains disarmed. Type UPRIGHT only while "
+                      "physically holding the pole up.")
     threading.Thread(target=wait_enter, daemon=True).start()
 
     theta_deg    = 180.0
@@ -236,9 +243,9 @@ def main():
         while True:
             t0 = time.time()
 
-            # ---- Vision (from V3 over ZMQ) -----------------------------
+            # ---- Vision (yellow-line orientation over ZMQ) -------------
             # latest_angle() drains the buffer -> freshest (theta, omega, pole_up).
-            # theta is already wrapped to (-pi, pi]; omega already LPF'd by V3.
+            # theta is wrapped to [-pi/2,+pi/2); omega is LPF'd by publisher.
             result = cam.latest_angle()
             if result is not None:
                 theta_rad, omega, pole_up = result

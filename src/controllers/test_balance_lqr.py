@@ -8,10 +8,9 @@ How it works:
   1. Connect, then you put the CART at track center and press ENTER -> encoder
      is zeroed there ONCE (so 0 = center, boundary check is symmetric).
   2. The script enters an ARMED state: motor OFF, live theta/omega readout.
-  3. You hold the pendulum up and steady it near 0 deg. The controller engages
-     ONLY when |theta| < ENGAGE_ANGLE_DEG AND |omega| < ENGAGE_OMEGA, held
-     steady for ENGAGE_HOLD_S — i.e. only once it's genuinely upright & still.
-     It will NOT start while you're still moving it toward 0.
+  3. Start with the pole hanging, then lift it through at least 45 degrees and
+     steady it near upright 0 deg.  Requiring this observed lift is essential:
+     the current line detector reports 0 for BOTH upright and hanging.
   4. On engage it prints "BALANCING — let go", runs balance_lqr_loop, and logs
      both CSVs to data/balance_diag/ with a "testbal_" prefix
      (testbal_log_* = swing-up schema for plot_swingup.py,
@@ -40,16 +39,18 @@ from motor_comm import MotorComm
 from camera_comm import CameraSubscriber
 from balance_lqr import balance_lqr_loop
 from config import (DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
-                    BALANCE_DIAG_DIR)
+                    BALANCE_DIAG_DIR, CURRENT_VISION_SCRIPT,
+                    VISION_SUPPORTS_UP_DOWN)
 
 # ── Engage gate (the "is it genuinely upright & steady?" condition) ───
-# Raw camera omega is noisy (~0.6 rad/s std — the reason balance uses an EKF),
+# Raw camera omega is noisy (the reason balance uses an EKF),
 # so the gate averages over a window instead of requiring every sample to pass:
 # engage when ALL samples in the window have |θ| < ENGAGE_ANGLE_DEG, and the
 # WINDOW-MEAN |ω| < ENGAGE_OMEGA. Per-sample ω checks never trigger by design.
 ENGAGE_ANGLE_DEG = 3.0     # every sample in the window within this of upright
 ENGAGE_OMEGA     = 0.3     # rad/s — window-mean angular rate below this
 ENGAGE_WINDOW_S  = 0.3     # judge steadiness over this much history
+LIFT_EVIDENCE_DEG = 45.0    # line detector: prove the pole left a vertical state
 
 PORT     = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
 ZMQ_ADDR = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
@@ -60,11 +61,14 @@ LOG_COLS = ["t_s", "theta_deg", "omega_rad_s", "E_minus_Eref", "pwm", "cart_pos"
 def wait_until_upright(cam):
     """Block (motor off) until the pendulum is steady near upright. Returns True,
     or False if Ctrl-C / no camera."""
-    print(f"\n  ARMED — hold the pendulum UP and steady near 0°.")
+    print(f"\n  ARMED — start hanging, LIFT through >{LIFT_EVIDENCE_DEG:.0f}°, then hold UP near 0°.")
+    if not VISION_SUPPORTS_UP_DOWN:
+        print("  (Required because the current line detector reports 0° at both verticals.)")
     print(f"  Engages when |θ|<{ENGAGE_ANGLE_DEG}° for {ENGAGE_WINDOW_S}s "
           f"AND mean |ω|<{ENGAGE_OMEGA} rad/s. Motor is OFF until then.")
     window     = deque()     # (t, theta_deg, omega) samples inside ENGAGE_WINDOW_S
     last_disp  = 0.0
+    saw_lift   = False
     while True:
         res = cam.latest_angle()
         if res is None:
@@ -72,6 +76,8 @@ def wait_until_upright(cam):
             continue
         theta_rad, omega, _ = res
         theta_deg = math.degrees(theta_rad)
+        if abs(theta_deg) >= LIFT_EVIDENCE_DEG:
+            saw_lift = True
 
         now = time.time()
         window.append((now, theta_deg, omega))
@@ -81,11 +87,12 @@ def wait_until_upright(cam):
         full     = window[-1][0] - window[0][0] >= ENGAGE_WINDOW_S * 0.9
         all_up   = all(abs(s[1]) < ENGAGE_ANGLE_DEG for s in window)
         mean_om  = sum(s[2] for s in window) / len(window)
-        ready    = full and all_up and abs(mean_om) < ENGAGE_OMEGA
+        branch_ok = VISION_SUPPORTS_UP_DOWN or saw_lift
+        ready    = branch_ok and full and all_up and abs(mean_om) < ENGAGE_OMEGA
 
         if now - last_disp > 0.1:
             sys.stdout.write(f"\r  θ={theta_deg:+7.1f}°  ω̄={mean_om:+5.2f} rad/s   "
-                             f"{'[READY -> engaging]' if ready else '[hold near 0°]  '}   ")
+                             f"{'[READY -> engaging]' if ready else '[lift, then hold near 0°]'}   ")
             sys.stdout.flush()
             last_disp = now
 
@@ -116,7 +123,7 @@ def main():
 
     time.sleep(0.5)
     if cam.drain() == 0:
-        print("  WARNING: no camera data. Is camerapreview_detect_color_V3.py running on the Pi?")
+        print(f"  WARNING: no camera data. Is {CURRENT_VISION_SCRIPT} running on the Pi?")
         comm.close()
         cam.close()
         return

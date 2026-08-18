@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+LEGACY vision publisher.  Superseded on 2026-08-18 by
+camerapreview_detect_yellow_tape_line_V1.py.  Keep this file for historical
+reproduction only; new vision work must use the yellow-tape line detector.
+
 Cart-pole pendulum angle detector (v3 — yellow->blue dual-color vector).
 
 Fixes vs v2:

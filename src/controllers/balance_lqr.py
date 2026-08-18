@@ -10,11 +10,13 @@ Same return contract:  'fall' | 'boundary' | 'interrupt'.
 State vector:
     x = [theta_rad, theta_dot_rad_s, x_cart_m, x_cart_dot_m_s]
 
-Control law (K precomputed by compute_lqr_K.py):
+Control law (the active K is defined in the block below; offline model
+calculations do not automatically replace it):
     pwm = -(K_theta · theta  +  K_theta_dot · theta_dot
           +  K_x · x_cart    +  K_x_dot · x_cart_dot)
 
-K is in PWM units because compute_lqr_K.py uses FORCE_PER_PWM in B.
+K is in PWM units.  The current active values are documented in
+`../../docs/lqr_gain_status.md`.
 """
 
 import csv
@@ -43,19 +45,16 @@ except AttributeError:
     _CLOCK_BOOTTIME = None
 
 # ----------------------------------------------------------------------
-# LQR GAINS — from compute_lqr_K.py (measured model: c=0.0195, b=16.0).
-# "R2" golden config, rollback 2026-07-08. Do NOT soften K or re-"fix" the
-# 50 Hz dither without A/B data — full audit in activity_log.md 2026-07-08.
+# ACTIVE LQR GAINS — current 80T baseline.
+# The PWM gains were scaled for the measured input-force change:
+#   scale = c_reference / c_80T = 0.0195 / 0.04221 = 0.462
+#   K_current = K_reference * scale, rounded to integer PWM gains.
+# Keep this block as the single runtime source of the current K.
 # ----------------------------------------------------------------------
-# 2026-07-22 v2: R2 golden K transplanted to 80T by the c-ratio
-# (0.0195/0.04221 = 0.462) -> linear loop identical to R2, but with 2x
-# saturation/v_max/deadband margins. The re-solved -6753 set ran the loop
-# 1.8x hotter than R2 -> 2.3Hz growing oscillation, 14/14 died <1.5s
-# (testbal_20260722_1517xx). User-approved change.
-K_THETA      = -3656    # = R2 -7912 x 0.462
-K_THETA_DOT  = -634     # = R2 -1372 x 0.462
-K_X          = -785     # = R2 -1700 x 0.462
-K_X_DOT      = -1373    # = R2 -2971 x 0.462
+K_THETA      = -3656
+K_THETA_DOT  = -634
+K_X          = -785
+K_X_DOT      = -1373
 PWM_SIGN     = +1       # verified: θ>0 = tilt right, +PWM = cart right
 
 # Zero-bias trim v2 (2026-07-09): adapts BETWEEN runs, frozen within a run.
@@ -119,7 +118,9 @@ def _deadband(pwm):
 
 def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
     """
-    Inline LQR balance. Drop-in replacement for swing_up_energy_dc.balance_loop.
+    Inline LQR balance. The current yellow-line vision source is valid here
+    only after the pole has been physically established upright; it cannot
+    distinguish an upright pole from a hanging one at startup.
 
     Args:
       comm        : MotorComm  (send_velocity, get_position)
@@ -238,7 +239,7 @@ def balance_lqr_loop(comm, cam, t0, log_writer, diag_prefix="balance_diag"):
                     last_sensor_ts_ns = sensor_ts_ns      # freshest capture time (BOOTTIME)
                 elif not warned_no_ts:
                     print("  [LQR] WARN: camera sent no SensorTimestamp — dynamic "
-                          "delay degraded to T_ACTUATION only. Update V3 camera or "
+                          "delay degraded to T_ACTUATION only. Update the current camera publisher or "
                           "raise T_ACTUATION.")
                     warned_no_ts = True
             else:

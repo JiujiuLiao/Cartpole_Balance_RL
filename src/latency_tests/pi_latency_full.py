@@ -9,10 +9,11 @@ Unlike pi_latency.py, this version:
      + buffering) using the hardware SensorTimestamp that libcamera/picamera2
      stamps at capture time. pi_latency.py started its clock at capture_array()
      and therefore could never see that segment.
-  2. Uses the REAL V3 vision pipeline by importing detect_centroid / compute_angle
-     straight from camerapreview_detect_color_V3.py, and replicates V3's camera
-     config (768x432, fixed exposure/gain, AE/AWB off). So ⓪/① reflect what the
-     controller actually runs — not an outdated v2 approximation.
+  2. Uses the current yellow-tape line pipeline by importing
+     detect_yellow_line / compute_angle straight from
+     camerapreview_detect_yellow_tape_line_V1.py, and replicates its default
+     camera config (768x432 main stream, fixed exposure/gain, AE/AWB off, no
+     explicit RAW stream). So ⓪/① reflect what the controller actually runs.
 
 Segments measured (all on the Pi's own clock — no cross-device sync needed):
 
@@ -22,8 +23,8 @@ Segments measured (all on the Pi's own clock — no cross-device sync needed):
         with clock_gettime_ns(CLOCK_BOOTTIME). This is the "LED-free" way to get
         the true camera latency on a CSI camera.
 
-  ① Image processing = V3 pipeline: BGR2HSV -> detect_centroid(yellow) +
-        detect_centroid(blue) -> compute_angle  (perf_counter delta)
+  ① Image processing = yellow HSV mask -> morphology -> connected components
+        -> PCA/fitLine direction -> compute_angle  (perf_counter delta)
 
   ② PID compute      = the control arithmetic itself (normally < 0.1 ms)
 
@@ -43,9 +44,7 @@ Usage on the Pi:
     python3 pi_latency_full.py /dev/ttyUSB0 --no-motor   # skip ④ (no cart movement)
 
 Notes:
-  - BOTH the yellow and blue markers must be visible for ① to run (V3 needs both
-    for the dual-color vector; a single marker falls back to the axis but that
-    path is not what we want to time).
+  - The yellow tape and calibrated pivot must be visible for ① to run.
   - ④ briefly pulses the motor each sample — keep the cart near center.
   - At 120 fps the frame interval is 8.33 ms, so ⓪ is quantized to frame
     boundaries. Run the full N samples and read the MEDIAN / P95, not one shot.
@@ -57,21 +56,22 @@ import time
 import sys
 from pathlib import Path
 
-# This folder (for the V3 detector) and its parent (for motor_comm) on the path.
+# Add src/ for motor_comm and src/vision for the current detector.
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
-sys.path.insert(0, str(_HERE.parent))
+_SRC = _HERE.parent
+sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(_SRC / "vision"))
 
-import cv2  # noqa: E402  (kept explicit; V3 also imports it)
+import cv2  # noqa: E402  (kept explicit; detector also imports it)
 
-# ── Reuse the REAL V3 vision logic and camera config ──────────────────────────
+# ── Reuse the current vision logic and camera config ──────────────────────────
 # Importing the module only defines functions/constants — main() is guarded by
 # __name__ == "__main__", so no camera/ZMQ/argparse runs on import.
-from camerapreview_detect_color_V3 import (   # noqa: E402
-    detect_centroid, compute_angle, detect_markers,
+from camerapreview_detect_yellow_tape_line_V1 import (   # noqa: E402
+    detect_yellow_line, compute_angle,
     load_hsv, load_axis,
-    W, H, RAW_W, RAW_H, FRAME_DURATION_US, EXPOSURE_US,
-    ANALOGUE_GAIN, LENS_POSITION,
+    W, H, FRAME_DURATION_US, EXPOSURE_US,
+    ANALOGUE_GAIN, LENS_POSITION, DETECT_SCALE,
 )
 
 try:
@@ -99,21 +99,20 @@ CLOCK = time.CLOCK_BOOTTIME
 # ── Main ────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 70)
-    print("  Pi Direct — FULL glass-to-motion latency (V3 pipeline + SensorTimestamp)")
+    print("  Pi Direct — FULL glass-to-motion latency (yellow-line pipeline + SensorTimestamp)")
     print("=" * 70)
     print(f"  Serial : {SERIAL_PORT}{'  (motor test ON)' if DO_MOTOR else '  (motor test OFF)'}")
     print(f"  Frame  : {W}x{H}  exposure={EXPOSURE_US}us  gain={ANALOGUE_GAIN}")
     print(f"  Samples: {N_SAMPLES}")
     print()
 
-    yl, yh, bl, bh = load_hsv()
+    yl, yh = load_hsv()
     axis = load_axis()
 
-    # ── Camera: replicate V3's config exactly, so ⓪/① match runtime. ──────────
+    # ── Camera: replicate the current detector defaults exactly. ──────────────
     picam = Picamera2()
     cfg = picam.create_video_configuration(
         main={"size": (W, H), "format": "RGB888"},
-        raw={"size": (RAW_W, RAW_H)},
         controls={
             "FrameDurationLimits": (FRAME_DURATION_US, FRAME_DURATION_US),
             "ExposureTime": EXPOSURE_US,
@@ -140,7 +139,7 @@ def main():
         print("  pyserial / motor_comm not importable — ③④ skipped.")
 
     print()
-    print("  Keep BOTH yellow and blue markers visible throughout the test.")
+    print("  Keep the yellow tape and calibrated pivot visible throughout the test.")
     if comm:
         print("  Cart pulses briefly each sample for ④ — keep it near center.")
     print()
@@ -155,6 +154,7 @@ def main():
     lat0, lat1, lat2, lat3, lat4, exps = [], [], [], [], [], []
     skipped = 0
     n = 0
+    previous_angle = None
 
     try:
         while n < N_SAMPLES:
@@ -173,14 +173,17 @@ def main():
                 break
             l0 = (now_ns - ts_sensor) / 1e6              # ms
 
-            # ── ① Image processing (REAL V3 pipeline, downscaled) ─
+            # ── ① Image processing (current yellow-line pipeline) ─
             s0 = time.perf_counter()
-            yc, bc = detect_markers(frame, yl, yh, bl, bh)
-            angle_raw, mode = compute_angle(yc, bc, axis)
+            candidate, _mask = detect_yellow_line(
+                frame, yl, yh, axis, DETECT_SCALE, previous_angle
+            )
+            angle_raw = compute_angle(candidate) if candidate is not None else None
             s1 = time.perf_counter()
             if angle_raw is None:
                 skipped += 1
                 continue
+            previous_angle = angle_raw
             l1 = (s1 - s0) * 1000
 
             # ── ② PID compute (representative arithmetic) ──────────

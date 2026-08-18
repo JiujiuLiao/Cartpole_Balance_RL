@@ -31,8 +31,8 @@ CSV columns:
     x_pulses       raw encoder count
     x_m            cart position (m)
     x_dot_m_s      finite-diff cart velocity (m/s)
-    theta_rad      latest camera angle (rad, 0=upright, +-pi=hanging);
-                   None if no fresh frame this tick
+    theta_rad      latest yellow-tape LINE orientation (rad, modulo pi);
+                   upright and hanging are both 0; None if no fresh frame
     theta_dot_rad_s  camera-reported angular velocity (rad/s); None if stale
     cam_ts         Pi timestamp from camera message (s); None if stale
 """
@@ -86,7 +86,7 @@ def main():
     parser.add_argument("--port", type=str, default=DEFAULT_SERIAL_PORT,
                         help="ESP32 serial port")
     parser.add_argument("--zmq", type=str, default=DEFAULT_ZMQ_ADDR,
-                        help="Pi camera ZMQ address (camerapreview_detect_color2.py)")
+                        help="Pi camera ZMQ address (current yellow-tape line publisher)")
     parser.add_argument("--output", type=str, default=None,
                         help="Output CSV filename")
     args = parser.parse_args()
@@ -106,8 +106,10 @@ def main():
     print(f"  Output:      {args.output}")
     print()
     print("  Setup:")
-    print("    1. camerapreview_detect_color2.py is running on the Pi.")
+    print("    1. camerapreview_detect_yellow_tape_line_V1.py is running on the Pi.")
     print("    2. Cart near center, free to move.")
+    print("       NOTE: theta is a modulo-pi line angle. Record which physical")
+    print("       branch (upright/hanging) was used before simulation replay.")
     if args.mode == "free":
         print("    3. After ENTER, push the pendulum to a known angle and release.")
     elif args.mode == "constant_force":

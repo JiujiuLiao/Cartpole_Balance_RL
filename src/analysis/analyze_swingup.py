@@ -2,6 +2,9 @@
 analyze_swingup.py
 ==================
 Visualize and analyze swing-up experiment data.
+This analyzer requires an oriented 2pi angle (0=upright, pi=hanging). It is
+not valid for new logs from camerapreview_detect_yellow_tape_line_V1.py unless
+an external up/down reference has first reconstructed the missing branch.
 Works with both:
   - angle_*.csv   (from measure_sigma_theta.py — angle + omega only)
   - swingup_*.csv (from swing_up_energy_dc.py — angle + omega + pwm + pos)

@@ -14,22 +14,25 @@
 Pi 4 (camera + PID) ──USB──▶ ESP32 (IBT-2 + DC motor + encoder)
 ```
 
-The PC is **no longer in the control loop**. The Pi runs the full pipeline
-in a single process:
+The PC is **no longer in the control loop**. The Pi runs two local processes:
 
 ```
-picamera2 frame  →  HSV mask  →  marker angle  →  PID  →  serial  →  ESP32
+picamera2 → yellow-line vision publisher → local ZMQ :9999
+                                      ↓
+                         controller → USB serial → ESP32
 ```
 
 The PC is used only for SSH-based editing, monitoring, and offline analysis.
 
-**Implication for AI:** scripts that depend on the old cross-machine ZMQ
-setup (`src/camera_comm.py`, plus anything importing from it) are **legacy**.
+`src/camera_comm.py` is the current shared local-ZMQ subscriber. Cross-machine
+addresses are legacy, but the subscriber itself is not.
 Current entry points:
-- Swing-up + balance handoff: `scripts/swing_up_energy_dc.py`
+- Isolated LQR balance:       `controllers/test_balance_lqr.py`
 - Standalone PD tuning:       `scripts/tune_balance_pd.py`
-Vision (`vision/camerapreview_detect_color_V3.py`) runs on the Pi and
-publishes over ZMQ to the same Pi — no cross-machine socket.
+Vision (`vision/camerapreview_detect_yellow_tape_line_V1.py`) runs on the Pi
+and publishes over ZMQ to the same Pi. The line angle is modulo pi and cannot
+distinguish upright from hanging, so automatic energy swing-up is currently
+disabled; `scripts/swing_up_energy_dc.py` refuses to arm.
 
 ---
 
@@ -47,13 +50,13 @@ cartpole-classical-control/
 │   │  ── core libraries (top level; shared, imported by everything) ──
 │   ├── config.py                    ← single source of truth (parameters + data paths)
 │   ├── motor_comm.py                ← MotorComm class — ESP32 serial protocol
-│   ├── camera_comm.py               ← LEGACY (ZMQ subscriber, old arch)
+│   ├── camera_comm.py               ← current local-ZMQ vision subscriber
 │   ├── ekf.py                       ← state estimator (angle + omega)
 │   │  ── subdirectories (organized by role, 2026-07 refactor) ──
 │   ├── controllers/                 ← control algorithm libraries + tools
 │   │   ├── balance_pd.py            ← PD balance loop  (called by swing-up)
 │   │   ├── balance_lqr.py           ← LQR balance loop (called by swing-up)
-│   │   ├── compute_lqr_K.py         ← LQR K solver (offline, pairs with balance_lqr)
+│   │   ├── compute_lqr_K.py         ← baseline LQR solver (offline; review before promotion)
 │   │   └── test_balance_lqr.py      ← simulation test for LQR
 │   ├── scripts/                     ← runnable entry-point scripts (`python xxx.py`)
 │   │   ├── swing_up_energy_dc.py    ← energy-method swing-up + dispatch to balance
@@ -65,16 +68,20 @@ cartpole-classical-control/
 │   │   ├── measure_ppr.py, test_pwm_range.py, test_accel_burst.py,
 │   │   ├── test_vmax.py, fit_force_curve.py, collect_b_data.py,
 │   │   ├── fit_ekf_b.py, record_validation_data.py,
-│   │   ├── acquire_pendulum_dynamics.py, test_frame_delay.py
+│   │   ├── acquire_pendulum_dynamics.py, free_swing_recorder.py,
+│   │   └── test_frame_delay.py
 │   ├── analysis/                    ← offline CSV analysis + plotting
 │   │   ├── analyze_pendulum.py, analyze_balance_diag.py, analyze_ekf_vs_meas.py,
 │   │   ├── analyze_swingup.py, plot_swingup.py, plot_vmax.py,
 │   │   └── compare_omega_filters.py, compare_pendulum_cart_half_period.py
 │   ├── latency_tests/               ← end-to-end latency probing
-│   │   ├── pc_end_to_end_latency.py, pi_latency_full.py, pi_vision_latency.py
+│   │   ├── pi_latency_full.py                       ← current pipeline
+│   │   └── pc_end_to_end_latency.py, pi_vision_latency.py ← legacy protocols
 │   └── vision/                      ← Pi-side real-time vision (currently active)
-│       ├── camerapreview_detect_color_V3.py     ← current vision publisher
-│       └── axis_calib.json                       ← pivot-axis persistence
+│       ├── camerapreview_detect_yellow_tape_line_V1.py ← current publisher
+│       ├── camerapreview_detect_color_V3.py             ← legacy dual-colour publisher
+│       ├── axis_calib.json                              ← pivot persistence
+│       └── hsv_calib.json                               ← yellow HSV persistence
 ├── dc_motor_controller/             ← ESP32 firmware (Arduino sketch)
 └── achive/                          ← archived, do not reference
 ```
@@ -115,8 +122,18 @@ Every entry point (swing-up, tuner, calibration, analysis) is a script
 inside a `src/*/` subdirectory. Run from the project root:
 
 ```bash
+# Current vision publisher (start first in its own Pi terminal):
+python3 src/vision/camerapreview_detect_yellow_tape_line_V1.py --no-gui
+
 # Swing-up + auto-handoff to balance (LQR by default; PD if USE_LQR_BALANCE=False):
+# Currently refuses to arm because the line detector has no up/down state.
 python3 src/scripts/swing_up_energy_dc.py /dev/ttyUSB0
+
+# Isolated hand-lift LQR balance:
+python3 src/controllers/test_balance_lqr.py /dev/ttyUSB0
+
+# Fixed-cart free swing (vision must use --publish-invalid):
+python3 src/calibration/free_swing_recorder.py --release-angle-deg 5 --run-id 5deg_run01
 
 # Standalone PD tuning (find Kp/Kd/Kx by hand, then copy winners into config.py):
 python3 src/scripts/tune_balance_pd.py /dev/ttyUSB0
@@ -126,9 +143,9 @@ python3 src/scripts/move_cart2_center.py /dev/ttyUSB0
 python3 src/analysis/analyze_swingup.py                 # offline analysis
 ```
 
-The Pi is where hardware scripts run today (its `/dev/ttyUSB0` is the
-ESP32). Vision publisher (`vision/camerapreview_detect_color_V3.py`) must
-be running in a separate terminal before any controller starts.
+The Pi is where hardware scripts run today (its `/dev/ttyUSB0` is the ESP32).
+The yellow-tape line publisher must be running in a separate terminal before
+any controller or camera-data logger starts.
 
 ---
 
@@ -164,7 +181,9 @@ be running in a separate terminal before any controller starts.
 ## Currently Open Items (PID work in progress)
 
 - [ ] `omega` units: convert to deg/s for consistency with `theta_deg`
-- [ ] First on-track balance run with LQR to confirm K values from `compute_lqr_K.py`
+- [ ] Validate yellow-line static zero/sign, valid-frame rate and dynamic latency
+- [ ] Add an asymmetric visual feature/sensor before re-enabling automatic swing-up
+- [ ] First on-track balance run with the active K documented in `../docs/lqr_gain_status.md`
 - [ ] Merge Pi-side tuning branch back into main
 
 ---
@@ -174,8 +193,8 @@ be running in a separate terminal before any controller starts.
 These files still build but belong to the old PC-loop architecture.
 Do not add features to them. New work goes in `scripts/` or `controllers/`.
 
-- `src/camera_comm.py`
 - `src/camerapreview_detect_color2.py`
+- `src/vision/camerapreview_detect_color_V3.py`
 - everything under `achive/`
 
 ---

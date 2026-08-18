@@ -2,7 +2,8 @@
 """
 Cart-pole pendulum angle detector (V1 - yellow tape line fit).
 
-This is an experimental alternative to camerapreview_detect_color_V3.py.
+This is the current Pi-side vision publisher as of 2026-08-18.  It supersedes
+camerapreview_detect_color_V3.py for current measurement and balance work.
 It uses the existing yellow HSV calibration, but treats the yellow tape as
 one elongated line instead of using a yellow-centroid -> blue-centroid vector.
 
@@ -21,15 +22,20 @@ The angle is currently treated as a LINE ORIENTATION modulo 180 degrees:
   +theta          -> clockwise line tilt as seen from the camera
 
 This version deliberately does not distinguish the pendulum pointing up from
-pointing down.  That will be added later with an asymmetric marker or another
-sensor.  Consequently, pole_up is published as 0 and this script must not yet
-be used as the final swing-up/balance angle source.
+pointing down.  That requires an asymmetric marker or another sensor.
+Consequently, pole_up is published as 0.  The stream is suitable for an
+isolated balance experiment that is initialized upright, and for small free
+oscillation tests around a known vertical equilibrium.  It is NOT suitable for
+automatic swing-up or any state machine that must distinguish up from down.
 
 The ZMQ message remains compatible with the existing camera subscriber:
-  "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns,sensor_ts_ns"
+  "a,a,a,a,theta_rad,omega_rad_s,pole_up,ts_ns,sensor_ts_ns,valid,frame_id"
+By default only valid frames are published, preserving controller behavior.
+Use --publish-invalid for raw free-swing logging so every camera frame is
+published and the valid-frame ratio can be measured.
 
-This script is for measurement and comparison first.  Do not use it for LQR
-control until the static angle calibration and dynamic comparison are done.
+Static angle sign/zero and dynamic latency still have to be validated for the
+current mechanical/camera setup before judging a controller from its output.
 """
 
 import argparse
@@ -57,7 +63,7 @@ EXPOSURE_US = 4000
 ANALOGUE_GAIN = 4.0
 LENS_POSITION = 4.5
 
-# The defaults match camerapreview_detect_color_V3.py.
+# Yellow thresholds retained from the previous dual-colour detector.
 HSV_YELLOW_LOW = np.array([18, 130, 90], dtype=np.uint8)
 HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
 
@@ -346,6 +352,9 @@ def main():
                         help="ZMQ PUB port (default 9999)")
     parser.add_argument("--record", type=str, default=None,
                         help="Optional CSV path for diagnostic recording")
+    parser.add_argument("--publish-invalid", action="store_true",
+                        help="Publish every frame with valid=0/1 and frame_id; "
+                             "required by raw-data loggers")
     parser.add_argument("--no-gui", action="store_true",
                         help="Headless mode; quit with Ctrl+C")
     parser.add_argument(
@@ -380,7 +389,10 @@ def main():
           f"frame jump <= {MAX_FRAME_ANGLE_STEP_DEG:.0f}deg")
     print(f"  ZMQ PUB      : tcp://*:{args.zmq_port}")
     print(f"  RAW stream   : {'1536x864 requested' if args.with_raw else 'disabled (main only)'}")
-    print("  NOTE         : measurement/comparison first; not LQR-ready yet")
+    print("  NOTE         : line angle is modulo 180deg; up/down are indistinguishable")
+    print("                 automatic swing-up is disabled for this vision source")
+    if args.publish_invalid:
+        print("  raw logging  : --publish-invalid enabled")
 
     picam2 = Picamera2()
     camera_config = {
@@ -478,18 +490,17 @@ def main():
                 fps_n = 0
                 fps_t0 = now
 
-            if valid:
-                wrapped = wrap_line_angle(angle)
+            wrapped = wrap_line_angle(angle)
+            if valid or args.publish_invalid:
                 # Up/down is intentionally not solved in this version.
                 pole_up = 0
                 sock.send_string(
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(wrapped)},"
                     f"{fmt(wrapped)},{fmt(wrapped)},{fmt(omega_filt)},"
                     f"{pole_up},{time.time_ns()},"
-                    f"{sensor_ts if sensor_ts is not None else 0}"
+                    f"{sensor_ts if sensor_ts is not None else 0},"
+                    f"{int(valid)},{frame_idx}"
                 )
-            else:
-                wrapped = wrap_line_angle(angle)
 
             if record_writer:
                 record_writer.writerow([

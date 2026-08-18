@@ -18,7 +18,9 @@ SETUP (read before running):
   1. Pole HANGING straight down, at rest. Cart near track center.
   2. The cart WILL move (PWM drives it). Keep hands clear. The script bounds the
      cart to +/-POS_LIMIT pulses and recenters on exit, but watch it.
-  3. Camera (V3) must be publishing.
+  3. The current yellow-tape line camera must be publishing. Because this
+     experiment fixes the operating branch as HANGING, the recorded line angle
+     is lifted by +pi before fitting the oriented pendulum model.
 
 Usage:
     python collect_b_data.py                       # /dev/ttyUSB0, default ZMQ
@@ -29,6 +31,7 @@ Output: bdata_YYYYMMDD_HHMMSS.csv  ->  python fit_ekf_b.py <that file>
 """
 
 import csv
+import math
 import sys
 import time
 import os
@@ -39,7 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor_comm import MotorComm
 from camera_comm import CameraSubscriber, parse_angle
-from config import DEFAULT_SERIAL_PORT, DEFAULT_ZMQ_ADDR, MAX_PULSES, PWM_DEADBAND
+from config import (DEFAULT_SERIAL_PORT, DEFAULT_ZMQ_ADDR, MAX_PULSES,
+                    PWM_DEADBAND, CURRENT_VISION_SCRIPT)
 
 PORT     = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERIAL_PORT
 ZMQ_ADDR = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ZMQ_ADDR
@@ -64,6 +68,7 @@ def main():
     print("  b-calibration data collection")
     print("=" * 56)
     print(f"  Port {PORT}   ZMQ {ZMQ_ADDR}")
+    print(f"  Vision {CURRENT_VISION_SCRIPT} (hanging branch: theta=line_angle+pi)")
     print(f"  steps={PWM_MAGS} every {STEP_S}s   pos limit=+/-{POS_LIMIT}")
     print()
     print("  Pole HANGING at rest, cart centered. Press ENTER to start...")
@@ -108,7 +113,12 @@ def main():
             if msg is not None:
                 parsed = parse_angle(msg)          # (theta_rad, omega, pole_up)
                 if parsed is not None:
-                    theta_rad, omega, _ = parsed
+                    theta_line, omega, _ = parsed
+                    # The line detector is modulo pi. This experiment guarantees
+                    # the pole is near the hanging branch, so theta=line+pi is
+                    # the corresponding oriented model angle. Trig/derivatives
+                    # remain continuous for the small oscillations used here.
+                    theta_rad = theta_line + math.pi
                     t = now - t0
                     rows.append([f"{t:.4f}", f"{theta_rad*57.2958:.3f}",
                                  f"{omega:.4f}", pwm, motor.get_position(default=0)])

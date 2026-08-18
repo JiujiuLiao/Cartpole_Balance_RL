@@ -2,7 +2,12 @@
 swing_up_energy_dc.py
 ======================
 Energy-based pendulum swing-up for DC motor + IBT-2 + ESP32.
-Uses camera angle data (ZMQ) for real-time closed-loop control.
+Uses an ORIENTED camera angle (ZMQ) for real-time closed-loop control.
+
+The current yellow-tape line detector is modulo pi and cannot distinguish the
+upright and hanging equilibria.  This entry point therefore refuses to arm
+while that source is configured.  Re-enable swing-up only after the vision
+system gains an asymmetric up/down reference.
 
 Control law (Åström 2000):
     E     = ω² - (2g/L)·cos(θ)        normalized energy
@@ -36,6 +41,7 @@ from config import (
     DEFAULT_SERIAL_PORT, SERIAL_BAUD, DEFAULT_ZMQ_ADDR,
     GRAVITY, PENDULUM_L_M, M_PER_PULSE, MAX_PULSES,
     PWM_DEADBAND, GIVEUP_ANGLE_DEG,
+    CURRENT_VISION_SCRIPT, VISION_SUPPORTS_UP_DOWN,
 )
 
 # ── Connections ───────────────────────────────────────────────────────
@@ -136,6 +142,14 @@ def main():
     print(f"  Boundary: ±{MAX_PULSES} pulses (~{MAX_PULSES*M_PER_PULSE*100:.1f} cm)")
     print()
 
+    if not VISION_SUPPORTS_UP_DOWN:
+        print("  REFUSED: automatic swing-up requires an oriented 2π angle.")
+        print(f"  Current source {CURRENT_VISION_SCRIPT} is a π-periodic line")
+        print("  orientation: upright and hanging both publish θ=0.")
+        print("  Use the isolated hand-lift balance test, or add an asymmetric")
+        print("  marker/sensor before re-enabling energy swing-up.")
+        return
+
     # Connect serial
     try:
         comm = MotorComm(PORT, SERIAL_BAUD, timeout=0.05, echo_timeout=0.08)
@@ -158,7 +172,7 @@ def main():
     n_drained = cam.drain()
     if n_drained == 0:
         print("  WARNING: no camera data received. Is the camera script running?")
-        print("  On Raspberry Pi: python3 vision/camerapreview_detect_color_V3.py")
+        print(f"  On Raspberry Pi: python3 vision/{CURRENT_VISION_SCRIPT}")
         comm.close()
         cam.close()
         return
@@ -282,4 +296,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 

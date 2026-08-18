@@ -23,8 +23,9 @@ swing_up_energy_dc.py already logs the full state (theta, omega, pwm, cart_pos)
 to swingup_*.csv itself. (This file used to be the swing-up companion logger;
 that role is now redundant, so it was slimmed down to the sigma_theta tool.)
 
-Wire format: reads parts[4]=theta, [5]=omega, [6]=pole_up. The V3 camera also
-sends parts[7]=send-ts and parts[8]=SensorTimestamp; this script ignores both.
+Wire format: reads parts[4]=line theta, [5]=omega, [6]=pole_up. The current
+yellow-line camera sends parts[7]=send-ts and parts[8]=SensorTimestamp; this
+script ignores both. pole_up is always false because the line is unoriented.
 
 See also: cartpole-pid/measure_pendulum.py — records free oscillation (no motor).
 """
@@ -41,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from camera_comm import CameraSubscriber
-from config import DEFAULT_ZMQ_ADDR
+from config import DEFAULT_ZMQ_ADDR, CURRENT_VISION_SCRIPT
 
 ZMQ_ADDR = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ZMQ_ADDR
 
@@ -52,6 +53,7 @@ print("=" * 50)
 print("  sigma_theta measurement  (hold the pole STILL)")
 print("=" * 50)
 print(f"  ZMQ: {ZMQ_ADDR}")
+print(f"  Source: {CURRENT_VISION_SCRIPT} (modulo-pi line orientation)")
 print()
 print("  Press ENTER to start recording...")
 input()

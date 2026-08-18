@@ -1,9 +1,17 @@
 # 倒立摆 PID 调参状态记录
 
-**最后更新**：2026-06-02
+**控制参数最后更新**：2026-06-02
+
+**视觉链路覆盖更新**：2026-08-18
 
 > 这是当前调参的工作状态，供下次开新会话时快速 onboard。
 > 只记录控制相关信息，不涉及硬件诊断历史。
+>
+> 视觉覆盖说明：当前发布器是
+> `src/vision/camerapreview_detect_yellow_tape_line_V1.py`，端口 9999。
+> 它输出模 180° 的黄色胶带直线方向，不能区分竖直向上/向下，
+> `pole_up` 恒为 0。自动能量甩起当前禁用；只允许已人工确认向上的
+> isolated balance，以及围绕已知竖直平衡点的小幅测量。
 
 ---
 
@@ -11,7 +19,7 @@
 
 - **架构**：单进程，Pi 上跑。swing-up 调 `compute_pwm`，catch 触发后**内联调用** `balance_loop()`（同进程，无切换延迟）。balance fall 后自动回 swing-up loop。
 - **控制频率**：swing-up 50 Hz，balance 100 Hz
-- **视觉**：v3 检测器（端口 9999 ZMQ legacy CSV），balance_pid 用 `camera_comm.py` 订阅
+- **视觉**：yellow-tape-line V1（端口 9999、9 字段兼容 CSV），控制器用 `camera_comm.py` 订阅
 
 ---
 
@@ -21,7 +29,7 @@
 |---|---|
 | `cartpole-pid/src/swing_up_energy_dc.py` | swing-up + 内联 balance（**核心调参文件**）|
 | `cartpole-pid/src/config.py` | 全局常量 + balance 增益 Kp/Kd/Kx/signs |
-| `cartpole-pid/src/hardware_measurement/camerapreview_detect_color2.py` | v3 视觉 |
+| `src/vision/camerapreview_detect_yellow_tape_line_V1.py` | 当前黄色胶带直线视觉发布器 |
 | `cartpole-pid/dc_motor_controller/dc_motor_controller.ino` | ESP32 固件（已稳定，不用动）|
 
 ---

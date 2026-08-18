@@ -12,8 +12,10 @@ Usage:
     python acquire_pendulum_dynamics.py --duration 60
 
 Steps:
-    1. Start camera:  python camerapreview_detect_color2.py --no-gui
-    2. Run this script, give the pendulum a push when prompted
+    1. Start camera:
+       python3 src/vision/camerapreview_detect_yellow_tape_line_V1.py --no-gui
+    2. Mechanically lock the cart. Run this script and release the pendulum
+       from a small displacement about the known hanging equilibrium.
     3. CSV saved automatically when recording ends
 
 Output: pendulum_YYYYMMDD_HHMMSS.csv  ->  analyze with analyze_pendulum.py (on PC)
@@ -29,7 +31,8 @@ from pathlib import Path
 # Allow `from camera_comm import ...` when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from camera_comm import CameraSubscriber
+from camera_comm import CameraSubscriber, parse_angle_ts
+from config import CALIBRATION_DIR, CURRENT_VISION_SCRIPT
 
 # ── Parameters ────────────────────────────────────
 ZMQ_ADDRESS  = "tcp://localhost:9999"   # this script runs on the Pi, hence localhost
@@ -54,6 +57,8 @@ print("  Pendulum Dynamics Data Acquisition")
 print("=" * 55)
 print(f"  Duration : {args.duration} s")
 print(f"  Output   : {args.output}")
+print(f"  Vision   : {CURRENT_VISION_SCRIPT}")
+print("  Angle    : unoriented line tilt; valid locally around known hanging vertical")
 print()
 print("  Confirm camera is running, then press ENTER.")
 print("  Push the pendulum after ENTER to start recording.")
@@ -63,7 +68,7 @@ input()
 rows            = []
 start_time      = time.time()
 end_time        = start_time + args.duration
-first_timestamp = None    # first Pi timestamp received, used as time origin
+first_timestamp = None    # first SensorTimestamp (or monotonic fallback)
 count           = 0
 
 print("  Recording started... (Ctrl+C to stop early)")
@@ -75,34 +80,22 @@ try:
             print("  Warning: no camera data received. Check camera script.")
             continue
 
-        parts = msg.split(",")
-
-        # ZMQ format — current cameras (V3, color2_henry) send 8 fields:
-        #   parts[0~4] : angles (queue, oldest to newest, rad, 0=up, pi=down)
-        #   parts[5]   : angle_velocity_avg (rad/s)
-        #   parts[6]   : pole_up (1 if near upright)
-        #   parts[7]   : timestamp (V3: time.time_ns(); color2: loop start)
-        # (the old 9-field format with a 2nd timestamp at parts[8] no longer exists;
-        #  requiring 9 here silently dropped EVERY frame → 0 samples recorded.)
-        if len(parts) < 8:
+        parsed = parse_angle_ts(msg)
+        if parsed is None:
             continue
+        angle_raw, angle_velocity, _pole_up, sensor_ts_ns = parsed
 
-        try:
-            angle_raw       = float(parts[4])   # most recent angle (rad)
-            angle_velocity  = float(parts[5])   # average angular velocity (rad/s)
-        except ValueError:
-            continue
-
-        # This script runs ON the Pi receiving from the LOCAL camera, so the local
-        # receive time is accurate enough for period/damping ID (recv jitter ~ms vs
-        # pendulum period ~1-2 s = negligible). Using it avoids the field-index /
-        # unit ambiguity of the embedded camera timestamp (ns vs s, parts[7] vs [8]).
-        timestamp = time.time()
+        # SensorTimestamp is generated at camera capture on CLOCK_BOOTTIME and
+        # removes variable receive/processing delay from the period estimate.
+        # Fall back to monotonic receive time only if the camera metadata is absent.
+        timestamp = (sensor_ts_ns / 1e9
+                     if sensor_ts_ns is not None else time.monotonic())
         if first_timestamp is None:
             first_timestamp = timestamp
         elapsed = timestamp - first_timestamp
 
-        rows.append([round(elapsed, 4), angle_raw, angle_velocity])
+        rows.append([round(elapsed, 6), angle_raw, angle_velocity,
+                     sensor_ts_ns or 0])
         count += 1
 
         # Print progress roughly once per second
@@ -118,10 +111,13 @@ except KeyboardInterrupt:
 cam.close()
 
 # ── Save CSV ──────────────────────────────────────
-output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
+os.makedirs(CALIBRATION_DIR, exist_ok=True)
+output_path = (args.output if os.path.isabs(args.output)
+               else os.path.join(CALIBRATION_DIR, args.output))
 with open(output_path, "w", newline="") as f:
     writer = csv.writer(f)
-    writer.writerow(["time_s", "angle_rad", "angle_velocity_rad_s"])
+    writer.writerow(["time_s", "angle_rad", "angle_velocity_rad_s",
+                     "sensor_ts_ns"])
     writer.writerows(rows)
 
 print()

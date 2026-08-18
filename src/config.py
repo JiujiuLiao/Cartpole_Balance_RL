@@ -104,7 +104,16 @@ RECENTER_TIMEOUT_S     = 10.0   # give up after this many seconds
 
 DEFAULT_SERIAL_PORT = "/dev/ttyUSB0"   # Pi is the host now (2026-05-29); override per-script if needed
 SERIAL_BAUD         = 115200
-DEFAULT_ZMQ_ADDR    = "tcp://127.0.0.1:9999"   # V3 PUB runs on same Pi (2026-05-29)
+CURRENT_VISION_SCRIPT = "camerapreview_detect_yellow_tape_line_V1.py"
+DEFAULT_ZMQ_ADDR      = "tcp://127.0.0.1:9999"  # current publisher runs on same Pi
+
+# The current yellow-tape detector measures an unoriented LINE, not a directed
+# pivot-to-tip vector.  Its angle repeats every pi radians and therefore cannot
+# distinguish upright from hanging.  Consumers that need an absolute up/down
+# state (especially automatic swing-up) must refuse this source or add another
+# asymmetric marker/sensor first.
+VISION_ANGLE_PERIOD_RAD    = math.pi
+VISION_SUPPORTS_UP_DOWN    = False
 
 
 # ════════════════════════════════════════════════════════════════════════

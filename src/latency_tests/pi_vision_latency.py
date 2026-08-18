@@ -1,4 +1,10 @@
 """
+LEGACY vision benchmark for the retired color2 pipeline.
+
+It does not represent camerapreview_detect_yellow_tape_line_V1.py. Use
+`python3 src/latency_tests/pi_latency_full.py --no-motor`, which imports and
+times the current detector directly.
+
 Vision pipeline latency benchmark — runs ON THE RASPBERRY PI.
 
 Measures only the camera + OpenCV processing chain locally
@@ -19,6 +25,11 @@ Usage on the Raspberry Pi:
 Note: a yellow or blue marker MUST be visible in the frame, otherwise
 findContours returns nothing and the iteration is skipped.
 """
+
+raise SystemExit(
+    "pi_vision_latency.py is the retired color2 benchmark; run "
+    "pi_latency_full.py --no-motor for the current yellow-line pipeline"
+)
 
 from picamera2 import Picamera2
 import cv2

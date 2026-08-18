@@ -5,16 +5,24 @@ Replaces the duplicated context/socket boilerplate in:
   tune_balance_pd.py, swing_up_energy_dc.py, measure_sigma_theta.py,
   calibration/acquire_pendulum_dynamics.py, latency_tests/pc_end_to_end_latency.py.
 
-The publisher is vision/camerapreview_detect_color_V3.py on the Raspberry Pi.
+The current publisher is
+vision/camerapreview_detect_yellow_tape_line_V1.py on the Raspberry Pi.
 
 Wire format (CSV string from the Pi):
   parts[0..4]  five most recent angles (rad); parts[4] is the newest
   parts[5]     average angular velocity (rad/s)
-  parts[6]     pole_up flag, "1"/"0" or "True"/"False"
+  parts[6]     pole_up flag. The current line detector always publishes 0
+               because an unoriented line cannot distinguish upright/downward.
   parts[7]     send time, time.time_ns() wall clock (legacy; old latency tests)
   parts[8]     SensorTimestamp (ns, CLOCK_BOOTTIME) = photon-capture time, 0 if
                unavailable. Read via parse_angle_ts() / latest_angle_ts() and
                compare against time.clock_gettime_ns(time.CLOCK_BOOTTIME).
+  parts[9]     valid flag in the current extended publisher
+  parts[10]    camera frame_id in the current extended publisher
+
+Controllers receive valid frames only in the publisher's default mode, so the
+legacy tuple API below remains unchanged. Raw loggers use --publish-invalid and
+must inspect parts[9] themselves instead of calling parse_angle().
 """
 
 import zmq
@@ -112,9 +120,11 @@ def parse_angle(msg):
     Parse a raw CSV message into (theta_rad, omega_rad_s, pole_up).
     Returns None on parse failure or if the message has too few fields.
 
-    theta_rad   parts[4]   most recent angle, rad (0=upright, ±π=hanging)
+    theta_rad   parts[4]   current line orientation, rad, in [-π/2,+π/2).
+                           It is modulo π: upright and hanging are both 0.
     omega       parts[5]   average angular velocity, rad/s
-    pole_up     parts[6]   bool, True if pendulum is currently near upright
+    pole_up     parts[6]   compatibility flag; always False for the current
+                           yellow-tape line publisher
     """
     try:
         # Both comma- and space-separated formats are accepted (older Pi code used spaces).

@@ -3,6 +3,10 @@ pc_end_to_end_latency.py
 ========================
 End-to-end latency measurement — runs ON THE PC.
 
+LEGACY ONLY: this script assumes an old cross-device timestamp protocol and
+cannot interpret the current publisher's CLOCK_BOOTTIME SensorTimestamp on a
+different PC clock. Use pi_latency_full.py on the Pi for the current pipeline.
+
 Measures the full control chain across 3 devices:
   Pi (vision) -> ZMQ -> PC (PID) -> Serial -> ESP32 (motor) -> encoder.
 
@@ -60,6 +64,10 @@ ENC_TIMEOUT  = 0.15      # s — max wait time for encoder to respond in ④
 
 # ── Main ──────────────────────────────────────────
 def main():
+    print("  REFUSED: pc_end_to_end_latency.py uses the retired cross-PC protocol.")
+    print("  Run src/latency_tests/pi_latency_full.py on the Pi instead.")
+    return
+
     print("=" * 65)
     print("  Inverted Pendulum — Latency Measurement")
     print("=" * 65)

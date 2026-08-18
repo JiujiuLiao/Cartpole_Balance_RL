@@ -2,14 +2,16 @@
 compute_lqr_K.py - Solve LQR gain K for the cart-pole, OFFLINE on PC.
 ======================================================================
 Runs ON: PC with scipy + numpy (NOT on Pi).
-Output : 4 numbers to paste into balance_lqr.py.
+Output : an offline model calculation.  It does NOT automatically replace
+         the active gain used by balance_lqr.py.
 
 Usage:
     1. Measure physical parameters in lab.
     2. Update values in **config.py** (single source of truth).
     3. Tune Q diagonal entries below (LQR-specific, stays local).
     4. python3 compute_lqr_K.py
-    5. Copy printed K = [k1, k2, k3, k4] into balance_lqr.py.
+    5. Compare the result with the current configuration and hardware data;
+       do not paste it into balance_lqr.py without model and hardware review.
 
 State vector convention (matches balance_lqr.py exactly):
     x = [theta, theta_dot, x_cart, x_cart_dot]
@@ -165,10 +167,10 @@ def main():
         print(f"    {e.real:+.4f} {e.imag:+.4f}j   [{marker}]")
     print(f"\n  Closed-loop stable: {(eigs.real < 0).all()}")
 
-    # Print copy-paste block for balance_lqr.py
+    # Print the offline result.  It is not the runtime-gain source.
     print()
     print("=" * 64)
-    print("  Copy this block into balance_lqr.py:")
+    print("  OFFLINE MODEL RESULT — DO NOT COPY WITHOUT REVIEW:")
     print("=" * 64)
     print(f"K_THETA      = {K[0]:+.4f}    # theta gain")
     print(f"K_THETA_DOT  = {K[1]:+.4f}    # theta_dot gain")
