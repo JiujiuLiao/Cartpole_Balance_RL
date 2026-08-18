@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yellow-tape pendulum publisher: 0=up, +/-pi=down, positive=clockwise."""
+"""Yellow-tape pendulum publisher: 0=up, left negative, right positive."""
 
 import argparse
 import cv2
@@ -33,8 +33,6 @@ MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 MIN_YELLOW_PIXELS = 20
 
 MAX_LINE_AXIS_DISTANCE_PX = 150.0
-
-MAX_FRAME_ANGLE_STEP_DEG = 35.0
 
 OMEGA_LPF_ALPHA = 0.55
 ZMQ_PORT = 9999
@@ -136,10 +134,9 @@ def _line_candidate(contour, mask, axis, detect_scale):
     axis_delta = axis_point - line_point
     axis_line_distance = abs(vx * float(axis_delta[1])
                              - vy * float(axis_delta[0]))
-    if axis_line_distance > MAX_LINE_AXIS_DISTANCE_PX:
-        return None
-
-    score = linearity * math.sqrt(float(len(points)))
+    axis_weight = min(1.0, MAX_LINE_AXIS_DISTANCE_PX /
+                      max(axis_line_distance, 1.0))
+    score = linearity * long_side * max(axis_weight, 0.05)
     axis_point = np.asarray(axis, dtype=np.float32)
     tip = points[np.argmax(np.sum((points - axis_point) ** 2, axis=1))]
     return {
@@ -160,7 +157,7 @@ def _line_candidate(contour, mask, axis, detect_scale):
     }
 
 
-def detect_yellow_line(frame, yl, yh, axis, detect_scale, previous_angle=None):
+def detect_yellow_line(frame, yl, yh, axis, detect_scale):
     """Detect the strongest linear yellow component in full-frame coordinates."""
     if detect_scale != 1.0:
         small = cv2.resize(
@@ -183,16 +180,6 @@ def detect_yellow_line(frame, yl, yh, axis, detect_scale, previous_angle=None):
         candidate = _line_candidate(contour, mask, axis, detect_scale)
         if candidate is not None:
             candidate["angle"] = compute_angle(candidate, axis)
-            if previous_angle is not None:
-                candidate["angle_step"] = abs(
-                    line_angle_delta(candidate["angle"], previous_angle)
-                )
-                if candidate["angle_step"] > math.radians(
-                    MAX_FRAME_ANGLE_STEP_DEG
-                ):
-                    continue
-            else:
-                candidate["angle_step"] = 0.0
             candidates.append(candidate)
 
     if not candidates:
@@ -260,7 +247,7 @@ def fmt(value, digits=6):
 
 def main():
     global MIN_YELLOW_PIXELS, DETECT_SCALE
-    global MAX_LINE_AXIS_DISTANCE_PX, MAX_FRAME_ANGLE_STEP_DEG
+    global MAX_LINE_AXIS_DISTANCE_PX
 
     parser = argparse.ArgumentParser(
         description="Cart-pole vision: yellow tape line angle detector"
@@ -277,11 +264,6 @@ def main():
     parser.add_argument(
         "--axis-line-gap", type=float, default=MAX_LINE_AXIS_DISTANCE_PX,
         help="Maximum fitted-line distance from pivot in pixels"
-    )
-    parser.add_argument(
-        "--max-angle-step-deg", type=float,
-        default=MAX_FRAME_ANGLE_STEP_DEG,
-        help="Reject a candidate that jumps this many degrees in one frame"
     )
     parser.add_argument("--zmq-port", type=int, default=ZMQ_PORT,
                         help="ZMQ PUB port (default 9999)")
@@ -301,7 +283,6 @@ def main():
     DETECT_SCALE = args.detect_scale
     MIN_YELLOW_PIXELS = args.min_pixels
     MAX_LINE_AXIS_DISTANCE_PX = args.axis_line_gap
-    MAX_FRAME_ANGLE_STEP_DEG = args.max_angle_step_deg
 
     gui = not args.no_gui
     axis_x, axis_y = load_axis()
@@ -320,9 +301,8 @@ def main():
     print(f"  pivot        : ({axis_x}, {axis_y})")
     print(f"  line rule    : yellow pixels >= {MIN_YELLOW_PIXELS}; "
           "linearity is used only for candidate ranking")
-    print(f"  pivot rule   : fitted line gap <= {MAX_LINE_AXIS_DISTANCE_PX:.0f}px; "
-          f"frame jump <= {MAX_FRAME_ANGLE_STEP_DEG:.0f}deg")
-    print("  angle        : 0 deg up, +/-180 deg down, positive clockwise")
+    print(f"  pivot rule   : fitted line gap <= {MAX_LINE_AXIS_DISTANCE_PX:.0f}px")
+    print("  angle        : 0 deg up, left negative, right positive")
     print(f"  ZMQ PUB      : tcp://*:{args.zmq_port}")
     print(f"  RAW stream   : {'1536x864 requested' if args.with_raw else 'disabled (main only)'}")
     if args.publish_invalid:
@@ -402,11 +382,15 @@ def main():
                 read_hsv_tuner(yl, yh)
 
             candidate, mask = detect_yellow_line(
-                frame, yl, yh, axis, DETECT_SCALE, angle_prev
+                frame, yl, yh, axis, DETECT_SCALE
             )
             valid = candidate is not None
             if valid:
                 angle_raw = compute_angle(candidate, axis)
+                candidate["angle_step"] = (
+                    abs(line_angle_delta(angle_raw, angle_prev))
+                    if angle_prev is not None else 0.0
+                )
                 angle = unwrap(angle_prev, angle_raw)
                 if angle_prev is not None and dt > 1e-6:
                     omega_inst = (angle - angle_prev) / dt
