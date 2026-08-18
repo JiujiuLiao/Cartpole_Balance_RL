@@ -4,13 +4,13 @@ Record raw free-swing data for the fixed-cart pendulum experiment.
 This recorder is deliberately separate from the control/validation logger:
 it does not send motor commands, does not use EKF output, and does not use
 ZMQ conflate mode. It expects camerapreview_detect_yellow_tape_line_V1.py to
-run with --publish-invalid, which includes invalid camera frames so the true
-valid-frame ratio can be measured.
+run with --publish-invalid --down-reference, which includes invalid camera
+frames and represents the known downward equilibrium near +/-pi.
 
 Run on the Raspberry Pi, after starting the current V1 camera publisher:
 
     python3 src/vision/camerapreview_detect_yellow_tape_line_V1.py \
-        --no-gui --publish-invalid
+        --no-gui --publish-invalid --down-reference
 
     python3 free_swing_recorder.py --release-angle-deg 5 \
         --run-id 5deg_run01 --duration 25

@@ -33,6 +33,10 @@ The ZMQ message remains compatible with the existing camera subscriber:
 By default only valid frames are published, preserving controller behavior.
 Use --publish-invalid for raw free-swing logging so every camera frame is
 published and the valid-frame ratio can be measured.
+Use --down-reference for the fixed-cart free-swing experiment.  In that mode
+the vertical downward equilibrium is represented near +/-pi ( +/-180 deg ),
+while the upright vertical line remains indistinguishable because this
+line-only detector has no up/down marker.
 
 Static angle sign/zero and dynamic latency still have to be validated for the
 current mechanical/camera setup before judging a controller from its output.
@@ -273,6 +277,14 @@ def wrap_line_angle(angle):
     return (angle + half_pi) % math.pi - half_pi
 
 
+def wrap_absolute_angle(angle):
+    """Wrap a directed angle to (-pi, pi], preferring +pi at the branch."""
+    wrapped = (angle + math.pi) % (2.0 * math.pi) - math.pi
+    if math.isclose(wrapped, -math.pi, abs_tol=1e-12):
+        return math.pi
+    return wrapped
+
+
 def line_angle_delta(current, previous):
     """Smallest signed difference between two unoriented line angles."""
     return wrap_line_angle(current - previous)
@@ -355,6 +367,10 @@ def main():
     parser.add_argument("--publish-invalid", action="store_true",
                         help="Publish every frame with valid=0/1 and frame_id; "
                              "required by raw-data loggers")
+    parser.add_argument("--down-reference", action="store_true",
+                        help="Publish angle using the free-swing convention: "
+                             "downward vertical near +/-180 deg. Use only "
+                             "with a pendulum known to start downward.")
     parser.add_argument("--no-gui", action="store_true",
                         help="Headless mode; quit with Ctrl+C")
     parser.add_argument(
@@ -393,6 +409,8 @@ def main():
     print("                 automatic swing-up is disabled for this vision source")
     if args.publish_invalid:
         print("  raw logging  : --publish-invalid enabled")
+    if args.down_reference:
+        print("  angle output : down-reference; downward vertical is near +/-180deg")
 
     picam2 = Picamera2()
     camera_config = {
@@ -490,7 +508,14 @@ def main():
                 fps_n = 0
                 fps_t0 = now
 
-            wrapped = wrap_line_angle(angle)
+            if args.down_reference:
+                # The line detector cannot distinguish up from down.  For a
+                # known downward-start free swing, offset its local vertical
+                # angle by pi so the raw stream follows the project's
+                # 0=upright, +/-pi=downward convention in the local experiment.
+                wrapped = wrap_absolute_angle(math.pi + angle)
+            else:
+                wrapped = wrap_line_angle(angle)
             if valid or args.publish_invalid:
                 # Up/down is intentionally not solved in this version.
                 pole_up = 0
