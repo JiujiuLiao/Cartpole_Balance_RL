@@ -26,8 +26,8 @@ LENS_POSITION = 4.5
 
 HSV_YELLOW_LOW = np.array([18, 130, 90], dtype=np.uint8)
 HSV_YELLOW_HIGH = np.array([35, 255, 255], dtype=np.uint8)
-HSV_WHITE_LOW = np.array([0, 0, 140], dtype=np.uint8)
-HSV_WHITE_HIGH = np.array([180, 105, 255], dtype=np.uint8)
+HSV_WHITE_LOW = np.array([0, 0, 90], dtype=np.uint8)
+HSV_WHITE_HIGH = np.array([180, 140, 255], dtype=np.uint8)
 
 DETECT_SCALE = 1.0
 
@@ -302,10 +302,11 @@ class AxisCalibrator:
 
 def open_hsv_tuner(yl, yh, wl, wh):
     cv2.namedWindow(HSV_WIN, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(HSV_WIN, 420, 300)
+    cv2.resizeWindow(HSV_WIN, 420, 360)
     bars = [
         ("Y_H_lo", int(yl[0]), 180), ("Y_H_hi", int(yh[0]), 180),
         ("Y_S_lo", int(yl[1]), 255), ("Y_V_lo", int(yl[2]), 255),
+        ("W_H_lo", int(wl[0]), 180), ("W_H_hi", int(wh[0]), 180),
         ("W_S_hi", int(wh[1]), 255), ("W_V_lo", int(wl[2]), 255),
     ]
     for name, value, maximum in bars:
@@ -317,6 +318,8 @@ def read_hsv_tuner(yl, yh, wl, wh):
     yh[0] = cv2.getTrackbarPos("Y_H_hi", HSV_WIN)
     yl[1] = cv2.getTrackbarPos("Y_S_lo", HSV_WIN)
     yl[2] = cv2.getTrackbarPos("Y_V_lo", HSV_WIN)
+    wl[0] = cv2.getTrackbarPos("W_H_lo", HSV_WIN)
+    wh[0] = cv2.getTrackbarPos("W_H_hi", HSV_WIN)
     wh[1] = cv2.getTrackbarPos("W_S_hi", HSV_WIN)
     wl[2] = cv2.getTrackbarPos("W_V_lo", HSV_WIN)
 
@@ -501,6 +504,8 @@ def main():
                 fps_n = 0
                 fps_t0 = now
 
+            yellow_mask_pixels = int(cv2.countNonZero(yellow_mask))
+            white_mask_pixels = int(cv2.countNonZero(white_mask))
             wrapped = wrap_angle(angle)
             if valid or args.publish_invalid:
                 pole_up = int(abs(wrapped) < math.radians(5))
@@ -598,6 +603,12 @@ def main():
                     display, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX,
                     0.48, (255, 255, 255), 1, cv2.LINE_AA
                 )
+                cv2.putText(
+                    display,
+                    f"mask: yellow={yellow_mask_pixels} white={white_mask_pixels}",
+                    (5, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.48,
+                    (255, 255, 255), 1, cv2.LINE_AA
+                )
                 cv2.imshow(WINDOW, display)
                 if show_mask:
                     yellow_display = yellow_mask
@@ -611,6 +622,12 @@ def main():
                         )
                     cv2.imshow("Yellow mask", yellow_display)
                     cv2.imshow("White mask", white_display)
+                    combined = np.zeros(
+                        (*yellow_display.shape, 3), dtype=np.uint8
+                    )
+                    combined[yellow_display > 0] = (0, 255, 255)
+                    combined[white_display > 0] = (255, 255, 255)
+                    cv2.imshow("Yellow + white mask", combined)
 
             if calibrator.click is not None:
                 axis = calibrator.click
@@ -636,6 +653,7 @@ def main():
                     if not show_mask:
                         cv2.destroyWindow("Yellow mask")
                         cv2.destroyWindow("White mask")
+                        cv2.destroyWindow("Yellow + white mask")
                     print(f"[mask] {'shown' if show_mask else 'hidden'}")
                 elif key == ord("s"):
                     save_hsv(yl, yh, wl, wh)
