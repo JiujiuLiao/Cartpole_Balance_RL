@@ -9,8 +9,8 @@ Unlike pi_latency.py, this version:
      + buffering) using the hardware SensorTimestamp that libcamera/picamera2
      stamps at capture time. pi_latency.py started its clock at capture_array()
      and therefore could never see that segment.
-  2. Uses the current yellow-tape line pipeline by importing
-     detect_yellow_line / compute_angle straight from
+  2. Uses the current yellow/white marker pipeline by importing
+     detect_markers / compute_angle straight from
      camerapreview_detect_yellow_tape_line_V1.py, and replicates its default
      camera config (768x432 main stream, fixed exposure/gain, AE/AWB off, no
      explicit RAW stream). So ⓪/① reflect what the controller actually runs.
@@ -68,7 +68,7 @@ import cv2  # noqa: E402  (kept explicit; detector also imports it)
 # Importing the module only defines functions/constants — main() is guarded by
 # __name__ == "__main__", so no camera/ZMQ/argparse runs on import.
 from camerapreview_detect_yellow_tape_line_V1 import (   # noqa: E402
-    detect_yellow_line, compute_angle,
+    detect_markers, gate_yellow, compute_angle,
     load_hsv, load_axis,
     W, H, FRAME_DURATION_US, EXPOSURE_US,
     ANALOGUE_GAIN, LENS_POSITION, DETECT_SCALE,
@@ -106,7 +106,7 @@ def main():
     print(f"  Samples: {N_SAMPLES}")
     print()
 
-    yl, yh = load_hsv()
+    yl, yh, wl, wh = load_hsv()
     axis = load_axis()
 
     # ── Camera: replicate the current detector defaults exactly. ──────────────
@@ -175,10 +175,11 @@ def main():
 
             # ── ① Image processing (current yellow-line pipeline) ─
             s0 = time.perf_counter()
-            candidate, _mask = detect_yellow_line(
-                frame, yl, yh, axis, DETECT_SCALE, previous_angle
+            yellow_raw, white, _yellow_mask, _white_mask = detect_markers(
+                frame, yl, yh, wl, wh, axis, DETECT_SCALE
             )
-            angle_raw = compute_angle(candidate) if candidate is not None else None
+            yellow, _yellow_distance = gate_yellow(yellow_raw, axis)
+            angle_raw = compute_angle(yellow, white, axis)
             s1 = time.perf_counter()
             if angle_raw is None:
                 skipped += 1
